@@ -1,4 +1,4 @@
-import { AI_LIMITS, chooseMove } from './search'
+import { AI_LIMITS, chooseMove } from './search2'
 import type { GameState } from '../game/types'
 import type { AIRequest, AIResponse } from './protocol'
 

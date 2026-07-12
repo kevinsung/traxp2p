@@ -10,7 +10,8 @@
  */
 import { randomAgent, searchAgent, type Agent } from '../src/ai/agent'
 import { playMatch } from '../src/ai/arena'
-import { AI_LIMITS, chooseMove } from '../src/ai/search'
+import { AI_LIMITS, chooseMove as chooseMoveV1 } from '../src/ai/search'
+import { chooseMove as chooseMoveV2 } from '../src/ai/search2'
 
 /**
  * Named agents available to the arena. Add a new implementation here to
@@ -23,7 +24,11 @@ import { AI_LIMITS, chooseMove } from '../src/ai/search'
  */
 function buildRegistry(limits: typeof AI_LIMITS): Record<string, Agent> {
   return {
-    current: searchAgent('current', chooseMove, limits),
+    // `current` tracks what the app ships (src/ai/worker.ts): the FastBoard
+    // search. `v1` is the previous engine-based search, kept as a regression
+    // baseline (promoted 2026-07-12: v2 beat v1 82% at 300ms, 93% at 1s).
+    current: searchAgent('current', chooseMoveV2, limits),
+    v1: searchAgent('v1', chooseMoveV1, limits),
     random: randomAgent('random'),
   }
 }
