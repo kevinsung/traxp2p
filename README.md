@@ -24,6 +24,7 @@ npm install
 npm run dev       # local dev server
 npm test          # game-engine test suite (vitest)
 npm run build     # type-check + production build (static site in dist/)
+npm run arena -- current random --games 50   # AI self-play arena, see docs/ai-arena.md
 ```
 
 To try P2P locally, open the app in two separate browser profiles/windows (they need
@@ -38,6 +39,8 @@ distinct storage), create a room in one, and join with the code in the other.
   hash so desyncs are detected instead of diverging.
 - `src/ui/` + `src/hooks/` — React components (board, picker, game screen, lobby) and
   the local/P2P game controllers.
+- `src/ai/` — the computer opponent (search + evaluation) and a headless self-play arena
+  for comparing implementations; see [`docs/ai-arena.md`](docs/ai-arena.md).
 
 Deploy by serving `dist/` from any static host (GitHub Pages, Netlify, Cloudflare Pages).
 

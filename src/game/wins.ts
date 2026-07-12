@@ -5,7 +5,7 @@ import type { Board, Color, Coord, Dir, PlacedTile, WinPath } from './types'
 /** A line win must span at least this many rows or columns. */
 export const LINE_SPAN = 8
 
-interface OpenEnd extends Coord {
+export interface OpenEnd extends Coord {
   /** Direction in which the track leaves cell (x,y) into empty space. */
   d: Dir
 }
@@ -48,13 +48,17 @@ export function detectWins(board: Board, through: PlacedTile[]): WinPath[] {
 const exits = (e: OpenEnd, d: Dir, edgeX: number): boolean => e.d === d && e.x === edgeX
 const exitsRow = (e: OpenEnd, d: Dir, edgeY: number): boolean => e.d === d && e.y === edgeY
 
-interface Track {
+export interface Track {
   cells: string[]
   loop: boolean
   ends?: [OpenEnd, OpenEnd]
 }
 
-function trace(board: Board, startX: number, startY: number, color: Color, visited: Set<string>): Track {
+/**
+ * Walk `color`'s track through (startX, startY), marking every visited
+ * `cell|color` in `visited`. Exported for the AI's position evaluation.
+ */
+export function trace(board: Board, startX: number, startY: number, color: Color, visited: Set<string>): Track {
   const startTile = board.get(key(startX, startY))!
   const [d1, d2] = ([0, 1, 2, 3] as const).filter((d) => edgeColor(startTile, d) === color)
   const cells = [key(startX, startY)]

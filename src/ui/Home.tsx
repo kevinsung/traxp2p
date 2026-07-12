@@ -1,15 +1,26 @@
 import { useState } from 'react'
 import { normalizeCode } from '../net/room'
+import type { Color } from '../game/types'
 
 export interface HomeProps {
   onLocal: () => void
+  onComputer: (human: Color) => void
   onCreate: () => void
   onJoin: (code: string) => void
   onRules: () => void
 }
 
-export function Home({ onLocal, onCreate, onJoin, onRules }: HomeProps) {
+type ColorChoice = Color | 'random'
+
+const COLOR_CHOICES: Array<{ value: ColorChoice; label: string }> = [
+  { value: 'W', label: 'White' },
+  { value: 'R', label: 'Red' },
+  { value: 'random', label: 'Random' },
+]
+
+export function Home({ onLocal, onComputer, onCreate, onJoin, onRules }: HomeProps) {
   const [code, setCode] = useState('')
+  const [colorChoice, setColorChoice] = useState<ColorChoice>('W')
 
   return (
     <div className="home">
@@ -47,6 +58,31 @@ export function Home({ onLocal, onCreate, onJoin, onRules }: HomeProps) {
             </button>
           </div>
         </form>
+
+        <div className="home-card join-card">
+          <span className="home-card-title">Play the computer</span>
+          <div className="seg-row" role="radiogroup" aria-label="Your color">
+            {COLOR_CHOICES.map(({ value, label }) => (
+              <button
+                key={value}
+                role="radio"
+                aria-checked={colorChoice === value}
+                className={colorChoice === value ? 'selected' : ''}
+                onClick={() => setColorChoice(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            className="btn primary"
+            onClick={() =>
+              onComputer(colorChoice === 'random' ? (Math.random() < 0.5 ? 'W' : 'R') : colorChoice)
+            }
+          >
+            Start
+          </button>
+        </div>
 
         <button className="home-card" onClick={onRules}>
           <span className="home-card-title">How to play</span>

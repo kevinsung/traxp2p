@@ -123,7 +123,7 @@ export function GameScreen(props: GameScreenProps) {
               ? state.board.size === 0
                 ? 'Place the first tile in the centre'
                 : 'Your move — pick a highlighted space'
-              : `Waiting for ${COLOR_NAME[state.turn]}…`}
+              : `Waiting for ${names[state.turn]}…`}
           </div>
         )}
       </main>
