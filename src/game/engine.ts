@@ -94,6 +94,15 @@ export function applyMove(state: GameState, move: Move): MoveOutcome {
   }
 }
 
+/** Rebuild the board as it stood after the first `ply` moves of `history`. */
+export function boardAtPly(history: MoveRecord[], ply: number): Board {
+  const board: Board = new Map()
+  for (let i = 0; i < ply; i++) {
+    for (const p of history[i].placed) board.set(key(p.x, p.y), p.tile)
+  }
+  return board
+}
+
 export function resign(state: GameState, player: Color): GameState {
   if (state.result) return state
   return { ...state, result: { winner: otherColor(player), reason: 'resignation', paths: [] } }

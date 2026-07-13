@@ -1,5 +1,6 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { key } from '../game/board'
+import { boardAtPly } from '../game/engine'
 import { legalMoves } from '../game/moves'
 import type { Color, Coord, GameState, Move, TileKind } from '../game/types'
 import { BoardView } from './Board'
@@ -26,10 +27,17 @@ export interface GameScreenProps {
 export function GameScreen(props: GameScreenProps) {
   const { state, perspective, names, banner, canAct, onPlay, onExit, onResign, onUndo, endAction } = props
   const [selected, setSelected] = useState<Coord | null>(null)
+  // History review: which ply the board shows; null means follow the live game.
+  const [viewPly, setViewPly] = useState<number | null>(null)
+
+  const plies = state.history.length
+  const atLive = viewPly === null || viewPly >= plies
+  const ply = atLive ? plies : viewPly
+  const goTo = (p: number) => setViewPly(p >= plies ? null : Math.max(0, p))
 
   const legalCells = useMemo(() => {
     const m = new Map<string, TileKind[]>()
-    if (!canAct || state.result) return m
+    if (!canAct || state.result || !atLive) return m
     for (const mv of legalMoves(state)) {
       const k = key(mv.x, mv.y)
       const list = m.get(k)
@@ -37,7 +45,25 @@ export function GameScreen(props: GameScreenProps) {
       else m.set(k, [mv.tile])
     }
     return m
-  }, [state, canAct])
+  }, [state, canAct, atLive])
+
+  const displayBoard = useMemo(
+    () => (atLive ? state.board : boardAtPly(state.history, ply)),
+    [state, atLive, ply],
+  )
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') goTo(ply - 1)
+      else if (e.key === 'ArrowRight') goTo(ply + 1)
+      else if (e.key === 'Home') goTo(0)
+      else if (e.key === 'End') setViewPly(null)
+      else return
+      e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   const play = (m: Move) => {
     setSelected(null)
@@ -45,7 +71,7 @@ export function GameScreen(props: GameScreenProps) {
   }
 
   const result = state.result
-  const lastMove = state.history.at(-1) ?? null
+  const lastMove = ply > 0 ? state.history[ply - 1] : null
 
   return (
     <div className="game-screen">
@@ -91,7 +117,25 @@ export function GameScreen(props: GameScreenProps) {
           </div>
         )}
 
-        <MoveList history={state.history} />
+        <MoveList history={state.history} currentPly={ply} onSelectPly={goTo} />
+
+        <div className="history-nav">
+          <button className="btn" onClick={() => goTo(0)} disabled={ply === 0} title="First position (Home)">
+            ⏮
+          </button>
+          <button className="btn" onClick={() => goTo(ply - 1)} disabled={ply === 0} title="Back (←)">
+            ◀
+          </button>
+          <span className="history-pos">
+            {ply} / {plies}
+          </span>
+          <button className="btn" onClick={() => goTo(ply + 1)} disabled={atLive} title="Forward (→)">
+            ▶
+          </button>
+          <button className="btn" onClick={() => setViewPly(null)} disabled={atLive} title="Live position (End)">
+            ⏭
+          </button>
+        </div>
 
         <div className="panel-actions">
           {onUndo && (
@@ -109,15 +153,20 @@ export function GameScreen(props: GameScreenProps) {
 
       <main className="board-wrap">
         <BoardView
-          board={state.board}
+          board={displayBoard}
           lastMove={lastMove}
-          winPaths={result?.paths ?? []}
+          winPaths={atLive ? (result?.paths ?? []) : []}
           legalCells={legalCells}
           selected={selected}
           onSelectCell={setSelected}
           onPlay={play}
         />
-        {!result && (
+        {!atLive && (
+          <div className="turn-banner reviewing">
+            Viewing move {ply} of {plies} — press ⏭ to return
+          </div>
+        )}
+        {atLive && !result && (
           <div className="turn-banner">
             {canAct
               ? state.board.size === 0

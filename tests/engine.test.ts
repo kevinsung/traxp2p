@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { key } from '../src/game/board'
-import { applyMove, hashState, newGame, resign } from '../src/game/engine'
+import { applyMove, boardAtPly, hashState, newGame, resign } from '../src/game/engine'
 import { legalMoves } from '../src/game/moves'
 import type { Board, GameState, Move, TileKind } from '../src/game/types'
 
@@ -150,6 +150,19 @@ describe('winning', () => {
   it('handles resignation', () => {
     const s = resign(play(newGame(), [m(0, 0, 'RRWW')]), 'R')
     expect(s.result).toEqual({ winner: 'W', reason: 'resignation', paths: [] })
+  })
+})
+
+describe('boardAtPly', () => {
+  it('rebuilds every intermediate position, including forced tiles', () => {
+    // The third move forces a tile at (1,-1); replaying `placed` must include it.
+    const moves = [m(0, 0, 'RRWW'), m(1, 0, 'WRWR'), m(0, -1, 'RWRW')]
+    const states = [newGame()]
+    for (const mv of moves) states.push(play(states.at(-1)!, [mv]))
+    const final = states.at(-1)!
+    for (let ply = 0; ply < states.length; ply++) {
+      expect(boardAtPly(final.history, ply)).toEqual(states[ply].board)
+    }
   })
 })
 

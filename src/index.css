@@ -453,6 +453,49 @@ h3 {
 
 .move-cell {
   color: var(--text-strong);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 0 4px;
+  margin: 0 -4px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.move-cell:empty {
+  cursor: default;
+}
+
+.move-cell:hover:not(:empty) {
+  background: var(--panel-2);
+}
+
+.move-cell.current {
+  background: var(--panel-2);
+  outline: 1px solid var(--border);
+}
+
+.history-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.history-nav .btn {
+  flex: 1;
+  padding: 4px 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.history-pos {
+  min-width: 4.5em;
+  text-align: center;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  opacity: 0.7;
 }
 
 .panel-actions {
@@ -624,6 +667,10 @@ h3 {
   font-size: 0.9rem;
   pointer-events: none;
   white-space: nowrap;
+}
+
+.turn-banner.reviewing {
+  color: var(--gold);
 }
 
 /* ---------- small screens ---------- */
