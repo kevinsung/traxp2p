@@ -8,6 +8,7 @@ export interface HomeProps {
   onCreate: () => void
   onJoin: (code: string) => void
   onRules: () => void
+  onExplore: () => void
 }
 
 type ColorChoice = Color | 'random'
@@ -18,7 +19,7 @@ const COLOR_CHOICES: Array<{ value: ColorChoice; label: string }> = [
   { value: 'random', label: 'Random' },
 ]
 
-export function Home({ onLocal, onComputer, onCreate, onJoin, onRules }: HomeProps) {
+export function Home({ onLocal, onComputer, onCreate, onJoin, onRules, onExplore }: HomeProps) {
   const [code, setCode] = useState('')
   const [colorChoice, setColorChoice] = useState<ColorChoice>('W')
 
@@ -83,6 +84,11 @@ export function Home({ onLocal, onComputer, onCreate, onJoin, onRules }: HomePro
             Start
           </button>
         </div>
+
+        <button className="home-card" onClick={onExplore}>
+          <span className="home-card-title">Trax explorer</span>
+          <span className="home-card-sub">Explore positions, share via URL</span>
+        </button>
 
         <button className="home-card" onClick={onRules}>
           <span className="home-card-title">How to play</span>

@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
+import { encodeMoves } from '../game/transcript'
 import type { MoveRecord } from '../game/types'
+import { useCopyButton } from '../hooks/useCopyButton'
 
 export interface MoveListProps {
   history: MoveRecord[]
@@ -15,6 +17,9 @@ export function MoveList({ history, currentPly, onSelectPly }: MoveListProps) {
     const target = list?.querySelector('.move-cell.current') ?? list?.lastElementChild
     target?.scrollIntoView({ block: 'nearest' })
   }, [history.length, currentPly])
+
+  const transcript = encodeMoves(history)
+  const copy = useCopyButton('Copy', 'Copied')
 
   const rows: Array<{ n: number; white?: MoveRecord; red?: MoveRecord }> = []
   history.forEach((rec, i) => {
@@ -35,15 +40,29 @@ export function MoveList({ history, currentPly, onSelectPly }: MoveListProps) {
     )
 
   return (
-    <div className="move-list" ref={listRef}>
-      {rows.length === 0 && <div className="move-list-empty">No moves yet</div>}
-      {rows.map((r) => (
-        <div className="move-row" key={r.n}>
-          <span className="move-num">{r.n}.</span>
-          {cell(r.white, r.n * 2 - 1)}
-          {cell(r.red, r.n * 2)}
-        </div>
-      ))}
+    <div className="transcript">
+      <div className="transcript-head">
+        <span className="transcript-label">Moves</span>
+        <button
+          className={`transcript-copy ${copy.label === 'Copied' ? 'copied' : ''}`}
+          onClick={() => copy.click(transcript)}
+          disabled={history.length === 0}
+          title="Copy this line's moves as standard Trax notation"
+        >
+          <span className="transcript-copy-icon">{copy.label === 'Copied' ? '✓' : '⧉'}</span>
+          {copy.label}
+        </button>
+      </div>
+      <div className="move-list" ref={listRef}>
+        {rows.length === 0 && <div className="move-list-empty">No moves yet</div>}
+        {rows.map((r) => (
+          <div className="move-row" key={r.n}>
+            <span className="move-num">{r.n}.</span>
+            {cell(r.white, r.n * 2 - 1)}
+            {cell(r.red, r.n * 2)}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

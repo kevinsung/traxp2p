@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { key } from '../game/board'
 import { boardAtPly } from '../game/engine'
 import { legalMoves } from '../game/moves'
+import { encodeMoves } from '../game/transcript'
 import type { Color, Coord, GameState, Move, TileKind } from '../game/types'
 import { BoardView } from './Board'
+import { HistoryNav } from './HistoryNav'
 import { MoveList } from './MoveList'
 
 const COLOR_NAME: Record<Color, string> = { W: 'White', R: 'Red' }
@@ -20,12 +22,15 @@ export interface GameScreenProps {
   onExit: () => void
   onResign?: () => void
   onUndo?: () => void
+  /** Open the explorer seeded with this game's moves, at the ply being viewed. */
+  onExplore?: (moves: string, ply: number) => void
   /** Shown on the game-over card. */
   endAction?: { label: string; run: () => void; note?: string }
 }
 
 export function GameScreen(props: GameScreenProps) {
-  const { state, perspective, names, banner, canAct, onPlay, onExit, onResign, onUndo, endAction } = props
+  const { state, perspective, names, banner, canAct, onPlay, onExit, onResign, onUndo, onExplore, endAction } =
+    props
   const [selected, setSelected] = useState<Coord | null>(null)
   // History review: which ply the board shows; null means follow the live game.
   const [viewPly, setViewPly] = useState<number | null>(null)
@@ -119,23 +124,14 @@ export function GameScreen(props: GameScreenProps) {
 
         <MoveList history={state.history} currentPly={ply} onSelectPly={goTo} />
 
-        <div className="history-nav">
-          <button className="btn" onClick={() => goTo(0)} disabled={ply === 0} title="First position (Home)">
-            ⏮
-          </button>
-          <button className="btn" onClick={() => goTo(ply - 1)} disabled={ply === 0} title="Back (←)">
-            ◀
-          </button>
-          <span className="history-pos">
-            {ply} / {plies}
-          </span>
-          <button className="btn" onClick={() => goTo(ply + 1)} disabled={atLive} title="Forward (→)">
-            ▶
-          </button>
-          <button className="btn" onClick={() => setViewPly(null)} disabled={atLive} title="Live position (End)">
-            ⏭
-          </button>
-        </div>
+        <HistoryNav
+          ply={ply}
+          plies={plies}
+          onFirst={() => goTo(0)}
+          onBack={() => goTo(ply - 1)}
+          onForward={() => goTo(ply + 1)}
+          onLast={() => setViewPly(null)}
+        />
 
         <div className="panel-actions">
           {onUndo && (
@@ -143,9 +139,18 @@ export function GameScreen(props: GameScreenProps) {
               Undo
             </button>
           )}
-          {onResign && !result && (
-            <button className="btn danger" onClick={onResign} disabled={state.board.size === 0}>
+          {onResign && (
+            <button className="btn danger" onClick={onResign} disabled={!!result || state.board.size === 0}>
               Resign
+            </button>
+          )}
+          {onExplore && (
+            <button
+              className="btn"
+              onClick={() => onExplore(encodeMoves(state.history), ply)}
+              title="Open this position in the explorer"
+            >
+              Explore
             </button>
           )}
         </div>

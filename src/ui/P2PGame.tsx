@@ -7,9 +7,10 @@ export interface P2PGameProps {
   code: string
   role: Role
   onExit: () => void
+  onExplore?: (moves: string, ply: number) => void
 }
 
-export function P2PGame({ code, role, onExit }: P2PGameProps) {
+export function P2PGame({ code, role, onExit, onExplore }: P2PGameProps) {
   const g = useP2PGame(code, role)
   const [copied, setCopied] = useState(false)
 
@@ -95,6 +96,7 @@ export function P2PGame({ code, role, onExit }: P2PGameProps) {
       onPlay={g.play}
       onResign={g.resign}
       onExit={onExit}
+      onExplore={onExplore}
       endAction={g.state.result ? endAction : undefined}
     />
   )

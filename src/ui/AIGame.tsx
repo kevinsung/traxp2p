@@ -5,9 +5,10 @@ import type { Color } from '../game/types'
 export interface AIGameProps {
   humanColor: Color
   onExit: () => void
+  onExplore?: (moves: string, ply: number) => void
 }
 
-export function AIGame({ humanColor, onExit }: AIGameProps) {
+export function AIGame({ humanColor, onExit, onExplore }: AIGameProps) {
   const g = useAIGame(humanColor)
   const names: Record<Color, string> =
     humanColor === 'W' ? { W: 'You', R: 'Computer' } : { W: 'Computer', R: 'You' }
@@ -29,6 +30,7 @@ export function AIGame({ humanColor, onExit }: AIGameProps) {
       onUndo={g.undo}
       onResign={g.resign}
       onExit={onExit}
+      onExplore={onExplore}
       endAction={{ label: 'Rematch', run: g.reset }}
     />
   )
