@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { normalizeCode } from '../net/room'
 import type { Color } from '../game/types'
+import { Logo } from './Logo'
 
 export interface HomeProps {
   onLocal: () => void
@@ -25,7 +26,7 @@ export function Home({ onLocal, onComputer, onCreate, onJoin, onRules, onExplore
 
   return (
     <div className="home">
-      <h1 className="logo">TRAX</h1>
+      <Logo />
 
       <div className="home-cards">
         <button className="home-card" onClick={onLocal}>

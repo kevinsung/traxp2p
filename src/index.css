@@ -46,10 +46,14 @@ h3 {
   font-weight: 800;
   letter-spacing: 0.35em;
   margin-right: -0.35em; /* optically recenter */
-  background: linear-gradient(120deg, var(--track-w) 40%, var(--track-r) 60%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+}
+
+.logo-w {
+  color: var(--track-w);
+}
+
+.logo-r {
+  color: var(--track-r);
 }
 
 .logo.small {
@@ -249,6 +253,62 @@ h3 {
 
 .rules-content b {
   color: var(--text-strong);
+}
+
+.rules-content p {
+  margin: 0 0 14px;
+}
+
+.rules-figures {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 18px 22px;
+  margin: 4px 0 20px;
+}
+
+.rules-figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.rules-figure figcaption {
+  font-size: 0.82rem;
+  color: var(--text);
+  text-align: center;
+}
+
+.rules-figure .fig-ok {
+  color: var(--accent);
+}
+
+.rules-figure .fig-bad {
+  color: var(--danger);
+}
+
+.mini-board {
+  display: block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+}
+
+.rules-empty {
+  fill: rgba(255, 255, 255, 0.02);
+  stroke: var(--border);
+  stroke-width: 2;
+  stroke-dasharray: 8 8;
+}
+
+.rules-arrow {
+  font-size: 1.6rem;
+  color: var(--text);
+  opacity: 0.6;
 }
 
 .room-code {
@@ -744,6 +804,13 @@ h3 {
   color: var(--gold);
 }
 
+.turn-banner.win-banner {
+  background: var(--panel);
+  border-color: var(--gold);
+  color: var(--gold);
+  font-weight: 600;
+}
+
 /* ---------- small screens ---------- */
 
 @media (max-width: 720px) {
@@ -753,13 +820,25 @@ h3 {
 
   .side-panel {
     width: 100%;
-    max-height: 45%;
+    max-height: 52%;
+    gap: 10px;
+    padding: 10px 12px;
     border-right: none;
     border-top: 1px solid var(--border);
   }
 
+  /* The panel's own "TRAX" wordmark is redundant on every subscreen; drop it
+     on mobile to reclaim vertical space for the move list and controls. */
+  .panel-header .logo.small {
+    display: none;
+  }
+
+  .player-chip {
+    padding: 6px 10px;
+  }
+
   .transcript {
-    min-height: 60px;
+    min-height: 110px;
   }
 
   .turn-banner {

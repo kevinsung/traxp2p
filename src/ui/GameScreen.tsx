@@ -6,7 +6,9 @@ import { encodeMoves } from '../game/transcript'
 import type { Color, Coord, GameState, Move, TileKind } from '../game/types'
 import { BoardView } from './Board'
 import { HistoryNav } from './HistoryNav'
+import { Logo } from './Logo'
 import { MoveList } from './MoveList'
+import { resultReasonText } from './resultText'
 
 const COLOR_NAME: Record<Color, string> = { W: 'White', R: 'Red' }
 
@@ -85,7 +87,7 @@ export function GameScreen(props: GameScreenProps) {
           <button className="btn ghost" onClick={onExit} title="Leave game">
             ← Leave
           </button>
-          <h1 className="logo small">TRAX</h1>
+          <Logo small />
         </div>
 
         <div className="players">
@@ -106,13 +108,7 @@ export function GameScreen(props: GameScreenProps) {
         {result && (
           <div className={`result-card winner-${result.winner}`}>
             <div className="result-title">{COLOR_NAME[result.winner]} wins!</div>
-            <div className="result-sub">
-              {result.reason === 'resignation'
-                ? 'by resignation'
-                : result.reason === 'loop'
-                  ? 'by completing a loop'
-                  : 'by completing a line across 8 rows'}
-            </div>
+            <div className="result-sub">{resultReasonText(result.reason)}</div>
             {endAction && (
               <button className="btn primary" onClick={endAction.run}>
                 {endAction.label}
@@ -169,6 +165,11 @@ export function GameScreen(props: GameScreenProps) {
         {!atLive && (
           <div className="turn-banner reviewing">
             Viewing move {ply} of {plies} — press ⏭ to return
+          </div>
+        )}
+        {atLive && result && (
+          <div className="turn-banner win-banner">
+            {COLOR_NAME[result.winner]} wins — {resultReasonText(result.reason)}
           </div>
         )}
         {atLive && !result && (

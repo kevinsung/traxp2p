@@ -7,7 +7,9 @@ import { useCopyButton } from '../hooks/useCopyButton'
 import { useExplorer, type ExplorerInit } from '../hooks/useExplorer'
 import { BoardView } from './Board'
 import { HistoryNav } from './HistoryNav'
+import { Logo } from './Logo'
 import { MoveList } from './MoveList'
+import { resultReasonText } from './resultText'
 
 export interface ExplorerProps {
   init?: ExplorerInit
@@ -97,7 +99,7 @@ export function Explorer({ init, onExit }: ExplorerProps) {
           <button className="btn ghost" onClick={onExit} title="Leave explorer">
             ← Leave
           </button>
-          <h1 className="logo small">TRAX</h1>
+          <Logo small />
         </div>
 
         <div className="home-card-title">Explorer</div>
@@ -107,9 +109,7 @@ export function Explorer({ init, onExit }: ExplorerProps) {
             <div className="result-title">
               {result.winner === 'W' ? 'White' : 'Red'} wins!
             </div>
-            <div className="result-sub">
-              {result.reason === 'loop' ? 'by completing a loop' : 'by completing a line across 8 rows'}
-            </div>
+            <div className="result-sub">{resultReasonText(result.reason)}</div>
           </div>
         )}
 
@@ -182,6 +182,11 @@ export function Explorer({ init, onExit }: ExplorerProps) {
         {aiBusy && (
           <div className="turn-banner reviewing">
             Computer is thinking<span className="dots" />
+          </div>
+        )}
+        {result && !aiBusy && (
+          <div className="turn-banner win-banner">
+            {result.winner === 'W' ? 'White' : 'Red'} wins — {resultReasonText(result.reason)}
           </div>
         )}
         {!result && !aiBusy && (

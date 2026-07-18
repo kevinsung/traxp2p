@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { copyText } from '../net/clipboard'
 import { useP2PGame, type Role } from '../hooks/useP2PGame'
 import { GameScreen } from './GameScreen'
+import { Logo } from './Logo'
 
 export interface P2PGameProps {
   code: string
@@ -18,7 +19,7 @@ export function P2PGame({ code, role, onExit, onExplore }: P2PGameProps) {
     const link = `${location.origin}${location.pathname}#room=${code}`
     return (
       <div className="lobby">
-        <h1 className="logo">TRAX</h1>
+        <Logo />
         {role === 'host' ? (
           <>
             <p>Share this room code with your opponent:</p>
@@ -64,7 +65,7 @@ export function P2PGame({ code, role, onExit, onExplore }: P2PGameProps) {
           : `Connection error: ${g.error ?? 'unknown'}.`
     return (
       <div className="lobby">
-        <h1 className="logo">TRAX</h1>
+        <Logo />
         <p className="lobby-error">{msg}</p>
         <button className="btn ghost" onClick={onExit}>
           ← Back to menu
