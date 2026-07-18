@@ -185,13 +185,7 @@ export function BoardView({ board, lastMove, winPaths, legalCells, selected, onS
               className={isSel ? 'legal-cell selected' : 'legal-cell'}
               onClick={() => {
                 if (movedRef.current) return
-                const tiles = legalCells.get(k)!
-                if (tiles.length === 1) {
-                  onPlay({ x, y, tile: tiles[0] })
-                  onSelectCell(null)
-                } else {
-                  onSelectCell(isSel ? null : { x, y })
-                }
+                onSelectCell(isSel ? null : { x, y })
               }}
             />
           )

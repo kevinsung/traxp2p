@@ -129,9 +129,8 @@ export function Rules({ onBack }: RulesProps) {
 
         <p>
           On your turn, place one tile — in whichever rotation you need — next to the existing tiles.
-          Every pair of touching edges must match colors. Tap an empty space in-game to play there:
-          if only one rotation fits, it's placed for you; if more than one fits, a picker lets you
-          choose.
+          Every pair of touching edges must match colors. Tap an empty space in-game to bring up a
+          picker showing every rotation that fits there — even when there's only one.
         </p>
 
         <div className="rules-figures">
