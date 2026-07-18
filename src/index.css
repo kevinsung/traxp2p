@@ -196,6 +196,17 @@ h3 {
   border-color: var(--accent);
 }
 
+.btn:focus-visible,
+.home-card:focus-visible,
+.seg-row button:focus-visible,
+.move-cell:focus-visible,
+.transcript-copy:focus-visible,
+.legal-cell:focus-visible,
+.recenter-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .join-row input.freeform {
   text-transform: none;
   letter-spacing: normal;
@@ -844,5 +855,16 @@ h3 {
   .turn-banner {
     bottom: 10px;
     font-size: 0.8rem;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .turn-dot,
+  .track-win,
+  .tile-pop,
+  .dots::after {
+    animation: none;
   }
 }
