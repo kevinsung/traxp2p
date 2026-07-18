@@ -5,6 +5,7 @@ import { encodeMoves, replayTranscript } from '../game/transcript'
 import type { Coord, Move, TileKind } from '../game/types'
 import { useCopyButton } from '../hooks/useCopyButton'
 import { useExplorer, type ExplorerInit } from '../hooks/useExplorer'
+import { useKeyboardPlay } from '../hooks/useKeyboardPlay'
 import { BoardView } from './Board'
 import { HistoryNav } from './HistoryNav'
 import { Logo } from './Logo'
@@ -54,23 +55,21 @@ export function Explorer({ init, onExit }: ExplorerProps) {
     return m
   }, [state, result, aiBusy])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') ex.back()
-      else if (e.key === 'ArrowRight') ex.forward()
-      else if (e.key === 'Home') ex.first()
-      else if (e.key === 'End') ex.last()
-      else return
-      e.preventDefault()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
-
   const play = (m: Move) => {
     setSelected(null)
     ex.play(m)
   }
+
+  const { cursor, pickerIndex, announce } = useKeyboardPlay({
+    board: state.board,
+    legalCells,
+    enabled: !result && !aiBusy,
+    atLive: ply >= plies,
+    selected,
+    setSelected,
+    onPlay: play,
+    history: { back: ex.back, forward: ex.forward, first: ex.first, last: ex.last },
+  })
 
   const shareLink = () => `${location.origin}${location.pathname}${hashFor(transcript, ply)}`
 
@@ -178,7 +177,12 @@ export function Explorer({ init, onExit }: ExplorerProps) {
           selected={selected}
           onSelectCell={setSelected}
           onPlay={play}
+          cursor={cursor}
+          pickerIndex={pickerIndex}
         />
+        <div className="sr-only" aria-live="polite">
+          {announce}
+        </div>
         {aiBusy && (
           <div className="turn-banner reviewing">
             Computer is thinking<span className="dots" />

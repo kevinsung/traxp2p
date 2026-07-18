@@ -8,10 +8,12 @@ export interface TilePickerProps {
   cell: Coord
   tiles: TileKind[]
   onPick: (t: TileKind) => void
+  /** Index highlighted by the keyboard (arrow keys cycle it). */
+  activeIndex?: number
 }
 
 /** In-board popover listing the tiles that may be played on `cell`. */
-export function TilePicker({ cell, tiles, onPick }: TilePickerProps) {
+export function TilePicker({ cell, tiles, onPick, activeIndex }: TilePickerProps) {
   const w = tiles.length * MINI + (tiles.length + 1) * GAP
   const h = MINI + 2 * GAP
   const cx = cell.x * TILE + TILE / 2
@@ -27,7 +29,7 @@ export function TilePicker({ cell, tiles, onPick }: TilePickerProps) {
         <g
           key={t}
           data-tile={t}
-          className="picker-option"
+          className={i === activeIndex ? 'picker-option active' : 'picker-option'}
           transform={`translate(${GAP + i * (MINI + GAP)} ${GAP})`}
           onClick={(e) => {
             e.stopPropagation()

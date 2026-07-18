@@ -202,7 +202,8 @@ h3 {
 .move-cell:focus-visible,
 .transcript-copy:focus-visible,
 .legal-cell:focus-visible,
-.recenter-btn:focus-visible {
+.recenter-btn:focus-visible,
+.board:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -748,6 +749,30 @@ h3 {
   stroke: var(--accent);
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.cursor-cell {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  pointer-events: none;
+  animation: cursorpulse 1.1s ease-in-out infinite;
+}
+
+@keyframes cursorpulse {
+  50% { opacity: 0.45; }
+}
+
 /* ---------- tile picker ---------- */
 
 .tile-picker .picker-card {
@@ -765,7 +790,8 @@ h3 {
   fill: transparent;
 }
 
-.picker-option:hover .picker-hit {
+.picker-option:hover .picker-hit,
+.picker-option.active .picker-hit {
   fill: rgba(76, 195, 138, 0.18);
   stroke: var(--accent);
   stroke-width: 1.5;

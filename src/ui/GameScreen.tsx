@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { key } from '../game/board'
 import { boardAtPly } from '../game/engine'
 import { legalMoves } from '../game/moves'
 import { encodeMoves } from '../game/transcript'
 import type { Color, Coord, GameState, Move, TileKind } from '../game/types'
+import { useKeyboardPlay } from '../hooks/useKeyboardPlay'
 import { BoardView } from './Board'
 import { HistoryNav } from './HistoryNav'
 import { Logo } from './Logo'
@@ -59,17 +60,20 @@ export function GameScreen(props: GameScreenProps) {
     [state, atLive, ply],
   )
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') goTo(ply - 1)
-      else if (e.key === 'ArrowRight') goTo(ply + 1)
-      else if (e.key === 'Home') goTo(0)
-      else if (e.key === 'End') setViewPly(null)
-      else return
-      e.preventDefault()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+  const { cursor, pickerIndex, announce } = useKeyboardPlay({
+    board: displayBoard,
+    legalCells,
+    enabled: canAct,
+    atLive,
+    selected,
+    setSelected,
+    onPlay: (m) => play(m),
+    history: {
+      back: () => goTo(ply - 1),
+      forward: () => goTo(ply + 1),
+      first: () => goTo(0),
+      last: () => setViewPly(null),
+    },
   })
 
   const play = (m: Move) => {
@@ -161,7 +165,12 @@ export function GameScreen(props: GameScreenProps) {
           selected={selected}
           onSelectCell={setSelected}
           onPlay={play}
+          cursor={cursor}
+          pickerIndex={pickerIndex}
         />
+        <div className="sr-only" aria-live="polite">
+          {announce}
+        </div>
         {!atLive && (
           <div className="turn-banner reviewing">
             Viewing move {ply} of {plies} — press ⏭ to return
@@ -177,7 +186,7 @@ export function GameScreen(props: GameScreenProps) {
             {canAct
               ? state.board.size === 0
                 ? 'Place the first tile in the centre'
-                : 'Your move — pick a highlighted space'
+                : 'Your move — pick a highlighted space, or use the keyboard'
               : `Waiting for ${names[state.turn]}…`}
           </div>
         )}

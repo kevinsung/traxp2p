@@ -19,9 +19,23 @@ export interface BoardProps {
   selected: Coord | null
   onSelectCell: (c: Coord | null) => void
   onPlay: (m: Move) => void
+  /** Keyboard-focused legal cell, if any (see useKeyboardPlay). */
+  cursor?: Coord | null
+  /** Tile highlighted by the keyboard within the open picker. */
+  pickerIndex?: number
 }
 
-export function BoardView({ board, lastMove, winPaths, legalCells, selected, onSelectCell, onPlay }: BoardProps) {
+export function BoardView({
+  board,
+  lastMove,
+  winPaths,
+  legalCells,
+  selected,
+  onSelectCell,
+  onPlay,
+  cursor,
+  pickerIndex,
+}: BoardProps) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 })
   const viewRef = useRef(view)
@@ -140,6 +154,9 @@ export function BoardView({ board, lastMove, winPaths, legalCells, selected, onS
     <svg
       ref={svgRef}
       className="board"
+      tabIndex={0}
+      role="application"
+      aria-label="Trax board. Tab or arrow keys to move between legal spaces, Enter to place a tile."
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -190,10 +207,22 @@ export function BoardView({ board, lastMove, winPaths, legalCells, selected, onS
             />
           )
         })}
+        {cursor && (
+          <rect
+            data-cursor={key(cursor.x, cursor.y)}
+            x={cursor.x * TILE + 3}
+            y={cursor.y * TILE + 3}
+            width={TILE - 6}
+            height={TILE - 6}
+            rx={11}
+            className="cursor-cell"
+          />
+        )}
         {selected && selectedTiles.length > 0 && (
           <TilePicker
             cell={selected}
             tiles={selectedTiles}
+            activeIndex={pickerIndex}
             onPick={(tile) => {
               onPlay({ ...selected, tile })
               onSelectCell(null)
