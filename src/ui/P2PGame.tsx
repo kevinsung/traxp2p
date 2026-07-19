@@ -87,11 +87,11 @@ export function P2PGame({ code, role, onExit, onExplore }: P2PGameProps) {
       perspective={g.myColor}
       names={{ W: 'White', R: 'Red' }}
       canAct={g.status === 'playing' && g.myColor === g.state.turn}
-      banner={
+      notice={
         g.status === 'peer-left' ? (
-          <div className="net-banner">
+          <>
             Opponent disconnected — they can rejoin with code <b>{code}</b>
-          </div>
+          </>
         ) : null
       }
       onPlay={g.play}

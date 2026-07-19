@@ -103,15 +103,6 @@ export function Explorer({ init, onExit }: ExplorerProps) {
 
         <div className="home-card-title">Explorer</div>
 
-        {result && (
-          <div className={`result-card winner-${result.winner}`}>
-            <div className="result-title">
-              {result.winner === 'W' ? 'White' : 'Red'} wins!
-            </div>
-            <div className="result-sub">{resultReasonText(result.reason)}</div>
-          </div>
-        )}
-
         <MoveList history={fullHistory} currentPly={ply} onSelectPly={ex.goTo} />
 
         <HistoryNav ply={ply} plies={plies} onFirst={ex.first} onBack={ex.back} onForward={ex.forward} onLast={ex.last} />
@@ -184,7 +175,7 @@ export function Explorer({ init, onExit }: ExplorerProps) {
           {announce}
         </div>
         {aiBusy && (
-          <div className="turn-banner reviewing">
+          <div className="turn-banner notice">
             Computer is thinking<span className="dots" />
           </div>
         )}

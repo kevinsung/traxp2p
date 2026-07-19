@@ -18,8 +18,8 @@ export interface GameScreenProps {
   /** Which color this client controls; null means hotseat (both). */
   perspective: Color | null
   names: Record<Color, string>
-  /** Extra banner content (connection status etc.). */
-  banner?: ReactNode
+  /** Extra status content (connection notices etc.), shown in the board banner. */
+  notice?: ReactNode
   canAct: boolean
   onPlay: (m: Move) => void
   onExit: () => void
@@ -27,12 +27,12 @@ export interface GameScreenProps {
   onUndo?: () => void
   /** Open the explorer seeded with this game's moves, at the ply being viewed. */
   onExplore?: (moves: string, ply: number) => void
-  /** Shown on the game-over card. */
+  /** Shown alongside the win banner when the game ends. */
   endAction?: { label: string; run: () => void; note?: string }
 }
 
 export function GameScreen(props: GameScreenProps) {
-  const { state, perspective, names, banner, canAct, onPlay, onExit, onResign, onUndo, onExplore, endAction } =
+  const { state, perspective, names, notice, canAct, onPlay, onExit, onResign, onUndo, onExplore, endAction } =
     props
   const [selected, setSelected] = useState<Coord | null>(null)
   // History review: which ply the board shows; null means follow the live game.
@@ -107,21 +107,6 @@ export function GameScreen(props: GameScreenProps) {
           ))}
         </div>
 
-        {banner}
-
-        {result && (
-          <div className={`result-card winner-${result.winner}`}>
-            <div className="result-title">{COLOR_NAME[result.winner]} wins!</div>
-            <div className="result-sub">{resultReasonText(result.reason)}</div>
-            {endAction && (
-              <button className="btn primary" onClick={endAction.run}>
-                {endAction.label}
-              </button>
-            )}
-            {endAction?.note && <div className="result-note">{endAction.note}</div>}
-          </div>
-        )}
-
         <MoveList history={state.history} currentPly={ply} onSelectPly={goTo} />
 
         <HistoryNav
@@ -178,10 +163,19 @@ export function GameScreen(props: GameScreenProps) {
         )}
         {atLive && result && (
           <div className="turn-banner win-banner">
-            {COLOR_NAME[result.winner]} wins — {resultReasonText(result.reason)}
+            <span>
+              {COLOR_NAME[result.winner]} wins — {resultReasonText(result.reason)}
+            </span>
+            {endAction && (
+              <button className="btn primary" onClick={endAction.run}>
+                {endAction.label}
+              </button>
+            )}
+            {endAction?.note && <span className="banner-note">{endAction.note}</span>}
           </div>
         )}
-        {atLive && !result && (
+        {atLive && !result && notice && <div className="turn-banner notice">{notice}</div>}
+        {atLive && !result && !notice && (
           <div className="turn-banner">
             {canAct
               ? state.board.size === 0

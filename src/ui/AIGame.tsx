@@ -19,11 +19,11 @@ export function AIGame({ humanColor, onExit, onExplore }: AIGameProps) {
       perspective={humanColor}
       names={names}
       canAct={!g.state.result && g.state.turn === humanColor && !g.thinking}
-      banner={
+      notice={
         g.thinking ? (
-          <div className="net-banner">
+          <>
             Computer is thinking<span className="dots" />
-          </div>
+          </>
         ) : null
       }
       onPlay={g.play}
