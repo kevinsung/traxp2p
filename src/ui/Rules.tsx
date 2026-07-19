@@ -243,18 +243,18 @@ export function Rules({ onBack }: RulesProps) {
         <div className="rules-figures">
           <Figure caption="A winding line across 8+ also wins">
             <MiniBoard
-              width={480}
+              width={125}
               highlight="R"
               cells={[
-                { x: 0, y: 0, tile: 'WRWR' },
-                { x: 1, y: 0, tile: 'WRWR' },
-                { x: 2, y: 0, tile: 'WRWR' },
-                { x: 3, y: 0, tile: 'WWRR' },
-                { x: 3, y: 1, tile: 'RRWW' },
-                { x: 4, y: 1, tile: 'WRWR' },
-                { x: 5, y: 1, tile: 'WRWR' },
-                { x: 6, y: 1, tile: 'WRWR' },
-                { x: 7, y: 1, tile: 'WRWR' },
+                { x: 0, y: 0, tile: 'RWRW' },
+                { x: 0, y: 1, tile: 'RWRW' },
+                { x: 0, y: 2, tile: 'RWRW' },
+                { x: 0, y: 3, tile: 'RRWW' },
+                { x: 1, y: 3, tile: 'WWRR' },
+                { x: 1, y: 4, tile: 'RWRW' },
+                { x: 1, y: 5, tile: 'RWRW' },
+                { x: 1, y: 6, tile: 'RWRW' },
+                { x: 1, y: 7, tile: 'RWRW' },
               ]}
             />
           </Figure>
