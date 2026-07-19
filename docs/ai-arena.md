@@ -33,7 +33,7 @@ npm run arena -- <agentA> <agentB> [--games N] [--ply N] [--seed N] [--budget MS
 Example output:
 
 ```
-current vs random — 50 games (seed 1, ply cap 300, budget 1000ms)
+current vs random — 50 games (seed 1, ply cap 300, budget 1500ms)
 
   current: 49    random: 0    draws: 1
   score for current: 99.0%  (95% CI 96.4%–100.0%)
@@ -62,7 +62,7 @@ straddles 50%, run more games rather than trusting the point estimate.
 4. **Head-to-head vs current** (the real test):
    `npm run arena -- v2 current --games 200 --seed 1`.
    Colors swap automatically each game, so the result isn't an artifact of who moved first.
-5. **Control for think time.** Compare at equal budgets: `--budget 1000` on both sides. If v2
+5. **Control for think time.** Compare at equal budgets: `--budget 1500` on both sides. If v2
    only wins because it searches longer, that's a speed result, not a strength one — re-run
    at matched budgets (and optionally matched node caps, if your variant exposes them) to
    isolate quality from compute.
