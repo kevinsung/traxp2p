@@ -11,9 +11,6 @@ export interface ExplorerInit {
   ply: number | null
 }
 
-/** Minimum apparent think time so instant replies don't feel jarring. */
-const MIN_THINK_MS = 400
-
 function initialLine(init?: ExplorerInit): GameState[] {
   if (!init?.moves) return [newGame()]
   const r = replayTranscript(init.moves)
@@ -70,17 +67,12 @@ export function useExplorer(init?: ExplorerInit) {
     const worker = workerRef.current
     if (!worker || thinking || state.result) return
     const id = ++requestId.current
-    const started = performance.now()
     setThinking(true)
     worker.onmessage = (e: MessageEvent<AIResponse>) => {
       const res = e.data
       if (res.id !== id) return
-      const finish = () => {
-        if (id !== requestId.current) return
-        setThinking(false)
-        if (res.move) applyPlay(res.move)
-      }
-      setTimeout(finish, Math.max(0, MIN_THINK_MS - (performance.now() - started)))
+      setThinking(false)
+      if (res.move) applyPlay(res.move)
     }
     const req: AIRequest = { id, board: [...state.board.entries()], turn: state.turn }
     worker.postMessage(req)
