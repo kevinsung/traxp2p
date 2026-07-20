@@ -103,6 +103,16 @@ export function boardAtPly(history: MoveRecord[], ply: number): Board {
   return board
 }
 
+/** Rebuild the full game state (board, turn, result) after the first `ply` moves. */
+export function stateAtPly(history: MoveRecord[], ply: number): GameState {
+  let st = newGame()
+  for (let i = 0; i < ply; i++) {
+    const out = applyMove(st, history[i].move)
+    if (out.ok) st = out.state
+  }
+  return st
+}
+
 export function resign(state: GameState, player: Color): GameState {
   if (state.result) return state
   return { ...state, result: { winner: otherColor(player), reason: 'resignation', paths: [] } }

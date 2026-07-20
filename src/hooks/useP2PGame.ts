@@ -1,11 +1,12 @@
 import { useEffect, useReducer, useRef } from 'react'
-import { applyMove, hashState, newGame, otherColor, resign } from '../game/engine'
+import { applyMove, hashState, newGame, otherColor, resign, stateAtPly } from '../game/engine'
 import type { Color, GameState, Move } from '../game/types'
 import { PROTOCOL_VERSION, type NetMsg } from '../net/protocol'
 import { joinTraxRoom, type TraxRoom } from '../net/room'
 
 export type P2PStatus = 'waiting' | 'playing' | 'peer-left' | 'desync' | 'full' | 'error'
 export type RematchState = 'none' | 'offered' | 'received'
+export type UndoState = 'none' | 'offered' | 'received'
 export type Role = 'host' | 'guest'
 
 export interface P2PGame {
@@ -14,10 +15,14 @@ export interface P2PGame {
   status: P2PStatus
   error: string | null
   rematch: RematchState
+  undo: UndoState
   play(m: Move): void
   resign(): void
   offerRematch(): void
   acceptRematch(): void
+  requestUndo(): void
+  approveUndo(): void
+  rejectUndo(): void
 }
 
 interface Session {
@@ -28,6 +33,8 @@ interface Session {
   status: P2PStatus
   error: string | null
   rematch: RematchState
+  undo: UndoState
+  pendingUndoTo: number | null
   destroy(): void
 }
 
@@ -40,6 +47,8 @@ function createSession(code: string, role: Role, notify: () => void): Session {
     status: 'waiting',
     error: null,
     rematch: 'none',
+    undo: 'none',
+    pendingUndoTo: null,
     destroy: () => s.room.leave(),
   }
 
@@ -79,7 +88,13 @@ function createSession(code: string, role: Role, notify: () => void): Session {
     if (id !== s.oppId) return
     s.oppId = null
     if (s.status === 'playing') s.status = 'peer-left'
+    clearUndo()
     notify()
+  }
+
+  const clearUndo = () => {
+    s.undo = 'none'
+    s.pendingUndoTo = null
   }
 
   const onMessage = (msg: NetMsg, from: string) => {
@@ -114,6 +129,7 @@ function createSession(code: string, role: Role, notify: () => void): Session {
         s.oppId = from
         s.myColor = msg.yourColor
         if (s.status !== 'full') s.status = 'playing'
+        clearUndo()
         break
       }
       case 'move': {
@@ -141,6 +157,17 @@ function createSession(code: string, role: Role, notify: () => void): Session {
         if (msg.accept && s.rematch === 'offered') startRematch()
         else if (!msg.accept) s.rematch = 'received'
         break
+      case 'undo-request':
+        if (from !== s.oppId || s.undo !== 'none') break
+        if (msg.to < 0 || msg.to >= s.state.history.length) break
+        s.undo = 'received'
+        s.pendingUndoTo = msg.to
+        break
+      case 'undo-response':
+        if (from !== s.oppId || s.undo !== 'offered') break
+        if (msg.accept && s.pendingUndoTo !== null) s.state = stateAtPly(s.state.history, s.pendingUndoTo)
+        clearUndo()
+        break
     }
     notify()
   }
@@ -149,6 +176,7 @@ function createSession(code: string, role: Role, notify: () => void): Session {
     s.state = newGame()
     s.myColor = otherColor(s.myColor!)
     s.rematch = 'none'
+    clearUndo()
   }
 
   s.room = joinTraxRoom(code, {
@@ -187,8 +215,9 @@ export function useP2PGame(code: string, role: Role): P2PGame {
     status: s?.status ?? 'waiting',
     error: s?.error ?? null,
     rematch: s?.rematch ?? 'none',
+    undo: s?.undo ?? 'none',
     play(m: Move) {
-      if (!s || s.status !== 'playing' || !s.myColor || s.state.turn !== s.myColor) return
+      if (!s || s.status !== 'playing' || !s.myColor || s.state.turn !== s.myColor || s.undo !== 'none') return
       const n = s.state.history.length
       const out = applyMove(s.state, m)
       if (!out.ok) return
@@ -214,6 +243,32 @@ export function useP2PGame(code: string, role: Role): P2PGame {
       s.state = newGame()
       s.myColor = otherColor(s.myColor!)
       s.rematch = 'none'
+      s.undo = 'none'
+      s.pendingUndoTo = null
+      notify()
+    },
+    requestUndo() {
+      if (!s || s.status !== 'playing' || !s.oppId || !s.myColor || s.undo !== 'none') return
+      const to = s.state.history.length - (s.state.turn === s.myColor ? 2 : 1)
+      if (to < 0) return
+      s.undo = 'offered'
+      s.pendingUndoTo = to
+      s.room.send({ t: 'undo-request', to })
+      notify()
+    },
+    approveUndo() {
+      if (!s || s.undo !== 'received' || s.pendingUndoTo === null) return
+      s.state = stateAtPly(s.state.history, s.pendingUndoTo)
+      s.room.send({ t: 'undo-response', accept: true })
+      s.undo = 'none'
+      s.pendingUndoTo = null
+      notify()
+    },
+    rejectUndo() {
+      if (!s || s.undo !== 'received') return
+      s.room.send({ t: 'undo-response', accept: false })
+      s.undo = 'none'
+      s.pendingUndoTo = null
       notify()
     },
   }

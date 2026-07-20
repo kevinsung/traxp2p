@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { key } from '../src/game/board'
-import { applyMove, boardAtPly, hashState, newGame, resign } from '../src/game/engine'
+import { applyMove, boardAtPly, hashState, newGame, resign, stateAtPly } from '../src/game/engine'
 import { legalMoves } from '../src/game/moves'
 import type { Board, GameState, Move, TileKind } from '../src/game/types'
 
@@ -162,6 +162,22 @@ describe('boardAtPly', () => {
     const final = states.at(-1)!
     for (let ply = 0; ply < states.length; ply++) {
       expect(boardAtPly(final.history, ply)).toEqual(states[ply].board)
+    }
+  })
+})
+
+describe('stateAtPly', () => {
+  it('rebuilds every intermediate state, matching board, turn, and hash', () => {
+    const moves = [m(0, 0, 'RRWW'), m(1, 0, 'WRWR'), m(0, -1, 'RWRW')]
+    const states = [newGame()]
+    for (const mv of moves) states.push(play(states.at(-1)!, [mv]))
+    const final = states.at(-1)!
+    for (let ply = 0; ply < states.length; ply++) {
+      const rebuilt = stateAtPly(final.history, ply)
+      expect(rebuilt.board).toEqual(states[ply].board)
+      expect(rebuilt.turn).toBe(states[ply].turn)
+      expect(rebuilt.history.length).toBe(ply)
+      expect(hashState(rebuilt)).toBe(hashState(states[ply]))
     }
   })
 })

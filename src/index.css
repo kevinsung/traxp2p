@@ -831,6 +831,18 @@ h3 {
   font-weight: 400;
 }
 
+.turn-banner.undo-banner {
+  top: 18px;
+  bottom: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(245, 196, 81, 0.1);
+  border-color: rgba(245, 196, 81, 0.4);
+  color: var(--gold);
+  pointer-events: auto;
+}
+
 /* ---------- small screens ---------- */
 
 @media (max-width: 720px) {

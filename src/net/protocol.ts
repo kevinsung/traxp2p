@@ -22,5 +22,8 @@ export type NetMsg =
   | { t: 'move'; n: number; x: number; y: number; tile: TileKind; hash: string }
   | { t: 'resign' }
   | { t: 'rematch'; accept: boolean }
+  /** Ask the opponent to rewind history so its length becomes `to`. */
+  | { t: 'undo-request'; to: number }
+  | { t: 'undo-response'; accept: boolean }
   /** The room already has two players. */
   | { t: 'full' }

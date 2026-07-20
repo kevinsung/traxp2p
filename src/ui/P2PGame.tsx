@@ -81,6 +81,30 @@ export function P2PGame({ code, role, onExit, onExplore }: P2PGameProps) {
         ? { label: 'Rematch offered…', run: () => {}, note: 'Waiting for your opponent to accept' }
         : { label: 'Accept rematch', run: g.acceptRematch, note: 'Your opponent wants a rematch' }
 
+  // Mirrors the target-ply computation in useP2PGame's requestUndo: only enabled
+  // once the requester has a move of their own on the board to take back.
+  const canRequestUndo =
+    g.status === 'playing' &&
+    g.myColor !== null &&
+    g.state.history.length - (g.state.turn === g.myColor ? 2 : 1) >= 0
+
+  const undoBanner =
+    g.undo === 'received' ? (
+      <>
+        <span>Opponent wants to undo the last move.</span>
+        <button className="btn primary" onClick={g.approveUndo}>
+          Approve
+        </button>
+        <button className="btn ghost" onClick={g.rejectUndo}>
+          Reject
+        </button>
+      </>
+    ) : g.undo === 'offered' ? (
+      <span>
+        Undo requested — waiting for your opponent<span className="dots" />
+      </span>
+    ) : undefined
+
   return (
     <GameScreen
       state={g.state}
@@ -96,6 +120,9 @@ export function P2PGame({ code, role, onExit, onExplore }: P2PGameProps) {
       }
       onPlay={g.play}
       onResign={g.resign}
+      onUndo={g.requestUndo}
+      undoDisabled={!canRequestUndo || g.undo !== 'none'}
+      undoBanner={undoBanner}
       onExit={onExit}
       onExplore={onExplore}
       endAction={g.state.result ? endAction : undefined}

@@ -25,6 +25,10 @@ export interface GameScreenProps {
   onExit: () => void
   onResign?: () => void
   onUndo?: () => void
+  /** Overrides the default (history-empty) disabled logic for the Undo button. */
+  undoDisabled?: boolean
+  /** Actionable undo-negotiation banner (request pending / awaiting response); shown top-center whenever present, even after the game ends. */
+  undoBanner?: ReactNode
   /** Open the explorer seeded with this game's moves, at the ply being viewed. */
   onExplore?: (moves: string, ply: number) => void
   /** Shown alongside the win banner when the game ends. */
@@ -32,8 +36,21 @@ export interface GameScreenProps {
 }
 
 export function GameScreen(props: GameScreenProps) {
-  const { state, perspective, names, notice, canAct, onPlay, onExit, onResign, onUndo, onExplore, endAction } =
-    props
+  const {
+    state,
+    perspective,
+    names,
+    notice,
+    canAct,
+    onPlay,
+    onExit,
+    onResign,
+    onUndo,
+    undoDisabled,
+    undoBanner,
+    onExplore,
+    endAction,
+  } = props
   const [selected, setSelected] = useState<Coord | null>(null)
   // History review: which ply the board shows; null means follow the live game.
   const [viewPly, setViewPly] = useState<number | null>(null)
@@ -120,7 +137,11 @@ export function GameScreen(props: GameScreenProps) {
 
         <div className="panel-actions">
           {onUndo && (
-            <button className="btn" onClick={onUndo} disabled={state.history.length === 0 && !result}>
+            <button
+              className="btn"
+              onClick={onUndo}
+              disabled={undoDisabled ?? (state.history.length === 0 && !result)}
+            >
               Undo
             </button>
           )}
@@ -156,6 +177,7 @@ export function GameScreen(props: GameScreenProps) {
         <div className="sr-only" aria-live="polite">
           {announce}
         </div>
+        {undoBanner && <div className="turn-banner undo-banner">{undoBanner}</div>}
         {!atLive && (
           <div className="turn-banner reviewing">
             Viewing move {ply} of {plies} — press ⏭ to return
