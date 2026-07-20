@@ -261,6 +261,35 @@ export function Rules({ onBack }: RulesProps) {
         </div>
 
         <p>
+          "Opposite edges" means the outermost edges of the <i>whole position</i>, not just the ends
+          of your track. If a tile elsewhere makes the board taller or wider than your line reaches,
+          an 8-long line can still fall short — it has to touch both extreme edges.
+        </p>
+
+        <div className="rules-figures">
+          <Figure
+            tone="bad"
+            caption="Eight long, but two tiles rounding the corner reach a ninth column — the line is one column short of the right edge, so it doesn't win"
+          >
+            <MiniBoard
+              width={480}
+              cells={[
+                { x: 0, y: 0, tile: 'WRWR' },
+                { x: 1, y: 0, tile: 'WRWR' },
+                { x: 2, y: 0, tile: 'WRWR' },
+                { x: 3, y: 0, tile: 'WRWR' },
+                { x: 4, y: 0, tile: 'WRWR' },
+                { x: 5, y: 0, tile: 'WRWR' },
+                { x: 6, y: 0, tile: 'WRWR' },
+                { x: 7, y: 0, tile: 'WRWR' },
+                { x: 7, y: 1, tile: 'WRRW' },
+                { x: 8, y: 1, tile: 'RWWR' },
+              ]}
+            />
+          </Figure>
+        </div>
+
+        <p>
           Careful: if your move completes your <b>opponent's</b> loop or line, they win. If it
           completes both colors at once, you win.
         </p>
