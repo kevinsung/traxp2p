@@ -10,6 +10,9 @@ interface View {
   k: number
 }
 
+/** Seconds between each forced tile's reveal, so cascades read as a sequence. */
+const REVEAL_STAGGER = 0.22
+
 export interface BoardProps {
   board: BoardMap
   lastMove: MoveRecord | null
@@ -170,7 +173,7 @@ export function BoardView({
             <g key={k} data-tile-at={k} transform={`translate(${x * TILE} ${y * TILE})`}>
               <g
                 className={placed ? 'tile-pop' : undefined}
-                style={placed ? { animationDelay: `${placed.order * 0.13}s` } : undefined}
+                style={placed ? { animationDelay: `${placed.order * REVEAL_STAGGER}s` } : undefined}
               >
                 <TileGfx tile={tile} highlight={winColorByCell.get(k)} />
               </g>
@@ -182,6 +185,7 @@ export function BoardView({
                   height={TILE - 4}
                   rx={9}
                   className={placed.forced ? 'last-move forced' : 'last-move'}
+                  style={{ animationDelay: `${placed.order * REVEAL_STAGGER}s` }}
                 />
               )}
             </g>

@@ -693,6 +693,13 @@ h3 {
   stroke: var(--accent-dim);
   stroke-width: 3;
   pointer-events: none;
+  animation: lastmovefade 0.28s ease backwards;
+}
+
+@keyframes lastmovefade {
+  from {
+    opacity: 0;
+  }
 }
 
 .last-move.forced {
@@ -885,6 +892,7 @@ h3 {
   .turn-dot,
   .track-win,
   .tile-pop,
+  .last-move,
   .dots::after {
     animation: none;
   }
