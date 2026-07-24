@@ -82,9 +82,10 @@ const isTextInput = (t: EventTarget | null): boolean =>
 /**
  * Keyboard control for the board: a spatial cursor over the legal cells
  * (Tab/arrows to move, Enter to open the tile picker; in the picker,
- * arrows cycle the highlighted tile and Enter or 1-3 places it), plus the
- * history-nav keys (arrows/Home/End) for whenever cursor play isn't active —
- * reviewing an earlier ply, or waiting on the other player.
+ * arrows cycle the highlighted tile and Enter or 1-3 places it), plus
+ * history-nav keys (PageUp/PageDown/Home/End) that always work, even
+ * mid-turn with the cursor or tile picker active — arrows are reserved
+ * for cell/tile selection so the two never fight over the same keys.
  */
 export function useKeyboardPlay({
   board,
@@ -125,6 +126,16 @@ export function useKeyboardPlay({
         e.preventDefault()
         return
       }
+      if (e.key === 'PageUp') {
+        history.back()
+        e.preventDefault()
+        return
+      }
+      if (e.key === 'PageDown') {
+        history.forward()
+        e.preventDefault()
+        return
+      }
 
       if (selected) {
         const tiles = legalCells.get(key(selected.x, selected.y)) ?? []
@@ -154,16 +165,7 @@ export function useKeyboardPlay({
         return
       }
 
-      if (!enabled || !atLive || legalCells.size === 0) {
-        if (e.key === 'ArrowLeft') {
-          history.back()
-          e.preventDefault()
-        } else if (e.key === 'ArrowRight') {
-          history.forward()
-          e.preventDefault()
-        }
-        return
-      }
+      if (!enabled || !atLive || legalCells.size === 0) return
 
       const cells = [...legalCells.keys()].map(parseKey)
 
