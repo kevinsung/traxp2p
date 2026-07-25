@@ -177,8 +177,8 @@ describe('FastBoard differential vs engine', () => {
     const state = newGame()
     let s = state
     for (const mv of [
-      { x: 0, y: 0, tile: 'RRWW' as TileKind },
-      { x: -1, y: 0, tile: 'RWWR' as TileKind },
+      { x: 0, y: 0, tile: 'WRRW' as TileKind },
+      { x: -1, y: 0, tile: 'WWRR' as TileKind },
     ]) {
       const out = applyMove(s, mv)
       if (!out.ok) throw new Error(out.reason)
@@ -186,7 +186,7 @@ describe('FastBoard differential vs engine', () => {
     }
     const fb = FastBoard.fromState(s)
     expect(fb.toBoard()).toEqual(s.board)
-    expect(fb.toBoard().get(key(0, 0))).toBe('RRWW')
+    expect(fb.toBoard().get(key(0, 0))).toBe('WRRW')
     expect(fb.hash()).toBe(positionHash(s.board, s.turn))
   })
 })

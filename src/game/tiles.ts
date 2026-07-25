@@ -4,9 +4,10 @@ export const ALL_TILES: readonly TileKind[] = ['WRWR', 'RWRW', 'WWRR', 'RWWR', '
 
 /**
  * The only two distinct first moves (all six tiles reduce to these two under
- * rotation on an empty board): a cross ("@0+") and a curve ("@0/").
+ * rotation on an empty board): a cross ("@0+") and a curve ("@0/", whose white
+ * track runs through the top-left corner).
  */
-export const FIRST_TILES: readonly TileKind[] = ['WRWR', 'RRWW']
+export const FIRST_TILES: readonly TileKind[] = ['WRWR', 'WRRW']
 
 export const edgeColor = (t: TileKind, d: Dir): Color => t[d] as Color
 

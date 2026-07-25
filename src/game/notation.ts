@@ -9,15 +9,17 @@ import type { Board, Move, TileKind } from './types'
  * rows are numbered 1.. from the topmost occupied row, with 0 for the row
  * above it. The first move is always "@0+" or "@0/".
  *
- * Tile symbols: '+' is a cross; '/' is a curve whose arcs hug the NE and SW
- * corners; '\' hugs NW and SE. The neighbor constraints at the target space
- * always disambiguate which coloring is meant.
+ * Tile symbols: '+' is a cross; for a curve, the symbol is the diagonal of the
+ * two corners between its *unconnected* sides (Wikipedia, "Trax (board game)").
+ * So '/' joins NW and SE — its arcs hug those corners, leaving NE and SW, which
+ * lie on the '/' diagonal, unconnected — and '\' joins NE and SW. The neighbor
+ * constraints at the target space always disambiguate which coloring is meant.
  */
 export type TileSymbol = '+' | '/' | '\\'
 
 export function symbolOf(tile: TileKind): TileSymbol {
   if (isCross(tile)) return '+'
-  return tile === 'WWRR' || tile === 'RRWW' ? '/' : '\\'
+  return tile === 'WRRW' || tile === 'RWWR' ? '/' : '\\'
 }
 
 function colLabel(i: number): string {
@@ -52,7 +54,7 @@ export function decodeMove(board: Board, text: string): Move | null {
   const b = bounds(board)
   if (!b) {
     if (colS !== '@' || rowS !== '0') return null
-    return sym === '+' ? { x: 0, y: 0, tile: 'WRWR' } : sym === '/' ? { x: 0, y: 0, tile: 'RRWW' } : null
+    return sym === '+' ? { x: 0, y: 0, tile: 'WRWR' } : sym === '/' ? { x: 0, y: 0, tile: 'WRRW' } : null
   }
   const x = b.minX - 1 + colIndex(colS)
   const y = b.minY - 1 + parseInt(rowS, 10)

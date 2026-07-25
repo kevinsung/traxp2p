@@ -19,19 +19,31 @@ function rng(seed: number): () => number {
 describe('notation', () => {
   it('encodes the two openings', () => {
     expect(encodeMove(new Map(), { x: 0, y: 0, tile: 'WRWR' })).toBe('@0+')
-    expect(encodeMove(new Map(), { x: 0, y: 0, tile: 'RRWW' })).toBe('@0/')
+    expect(encodeMove(new Map(), { x: 0, y: 0, tile: 'WRRW' })).toBe('@0/')
+  })
+
+  it('names curves by the diagonal of their unconnected corners', () => {
+    // Wikipedia, "Trax (board game)": the curved tiles are denoted by the
+    // forward slash ('/') or backslash ('\') characters, "which represent the
+    // direction of the diagonal of the corners between unconnected sides".
+    // So '/' joins NW and SE, and '@0/' is white running top-left.
+    expect(symbolOf('WRRW')).toBe('/')
+    expect(symbolOf('RWWR')).toBe('/')
+    expect(symbolOf('WWRR')).toBe('\\')
+    expect(symbolOf('RRWW')).toBe('\\')
   })
 
   it('uses @ and 0 for cells left of / above the current bounding box', () => {
-    const board: Board = new Map([[key(0, 0), 'RRWW']])
-    expect(encodeMove(board, { x: -1, y: 0, tile: 'RWWR' })).toBe('@1\\')
-    expect(encodeMove(board, { x: 0, y: -1, tile: 'WRRW' })).toBe('A0\\')
+    const board: Board = new Map([[key(0, 0), 'WRRW']])
+    expect(encodeMove(board, { x: -1, y: 0, tile: 'WWRR' })).toBe('@1\\')
+    expect(encodeMove(board, { x: 0, y: -1, tile: 'RWWR' })).toBe('A0/')
     expect(encodeMove(board, { x: 1, y: 0, tile: 'WRWR' })).toBe('B1+')
   })
 
   it('decodes the openings', () => {
     expect(decodeMove(new Map(), '@0+')).toEqual({ x: 0, y: 0, tile: 'WRWR' })
-    expect(decodeMove(new Map(), '@0/')).toEqual({ x: 0, y: 0, tile: 'RRWW' })
+    expect(decodeMove(new Map(), '@0/')).toEqual({ x: 0, y: 0, tile: 'WRRW' })
+    expect(decodeMove(new Map(), '@0\\')).toBeNull()
     expect(decodeMove(new Map(), 'A1+')).toBeNull()
   })
 

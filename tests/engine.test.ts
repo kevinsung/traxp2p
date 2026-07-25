@@ -25,7 +25,7 @@ describe('first move', () => {
     const moves = legalMoves(newGame())
     expect(moves).toHaveLength(2)
     expect(moves.every((mv) => mv.x === 0 && mv.y === 0)).toBe(true)
-    expect(new Set(moves.map((mv) => mv.tile))).toEqual(new Set(['WRWR', 'RRWW']))
+    expect(new Set(moves.map((mv) => mv.tile))).toEqual(new Set(['WRWR', 'WRRW']))
   })
 
   it('rejects first moves off the origin or with non-canonical tiles', () => {
@@ -35,7 +35,7 @@ describe('first move', () => {
 })
 
 describe('placement rules', () => {
-  const base = play(newGame(), [m(0, 0, 'RRWW')])
+  const base = play(newGame(), [m(0, 0, 'WRRW')])
 
   it('rejects occupied cells', () => {
     expect(applyMove(base, m(0, 0, 'WRWR')).ok).toBe(false)
@@ -46,8 +46,8 @@ describe('placement rules', () => {
   })
 
   it('rejects mismatched edges', () => {
-    // (0,0)=RRWW has E=R, so the new tile's W edge must be R, not W.
-    expect(applyMove(base, m(1, 0, 'RRWW')).ok).toBe(false)
+    // (0,0)=WRRW has E=R, so the new tile's W edge must be R, not W.
+    expect(applyMove(base, m(1, 0, 'WRRW')).ok).toBe(false)
     expect(applyMove(base, m(1, 0, 'WRWR')).ok).toBe(true)
   })
 
@@ -59,41 +59,41 @@ describe('placement rules', () => {
 
 describe('forced play', () => {
   it('fills a space that gains two same-colored edges', () => {
-    // (0,-1)=RWRW gives (1,-1) a white edge from the west; (1,0)=WRWR gives
-    // it a white edge from the south -> forced RRWW at (1,-1).
-    const s = play(newGame(), [m(0, 0, 'RRWW'), m(1, 0, 'WRWR'), m(0, -1, 'RWRW')])
-    expect(s.board.get(key(1, -1))).toBe('RRWW')
+    // (0,1)=RWRW gives (1,1) a white edge from the west; (1,0)=WRWR gives
+    // it a white edge from the north -> forced WRRW at (1,1).
+    const s = play(newGame(), [m(0, 0, 'WRRW'), m(1, 0, 'WRWR'), m(0, 1, 'RWRW')])
+    expect(s.board.get(key(1, 1))).toBe('WRRW')
     const last = s.history.at(-1)!
     expect(last.placed).toHaveLength(2)
-    expect(last.placed[1]).toEqual({ x: 1, y: -1, tile: 'RRWW', forced: true })
+    expect(last.placed[1]).toEqual({ x: 1, y: 1, tile: 'WRRW', forced: true })
   })
 
   it('cascades: a forced tile can force another space', () => {
-    // As above, but (2,-2)=WRRW presents a red edge down at (2,-1). The
-    // forced RRWW at (1,-1) presents a red edge east at (2,-1) too -> a
-    // second forced tile RWWR at (2,-1).
+    // As above, but (2,2)=RRWW presents a red edge up at (2,1). The forced
+    // WRRW at (1,1) presents a red edge east at (2,1) too -> a second forced
+    // tile WWRR at (2,1).
     const s0 = stateWith([
-      [0, 0, 'RRWW'],
+      [0, 0, 'WRRW'],
       [1, 0, 'WRWR'],
-      [2, -2, 'WRRW'],
+      [2, 2, 'RRWW'],
     ])
-    const out = applyMove(s0, m(0, -1, 'RWRW'))
+    const out = applyMove(s0, m(0, 1, 'RWRW'))
     expect(out.ok).toBe(true)
     if (!out.ok) return
-    expect(out.state.board.get(key(1, -1))).toBe('RRWW')
-    expect(out.state.board.get(key(2, -1))).toBe('RWWR')
+    expect(out.state.board.get(key(1, 1))).toBe('WRRW')
+    expect(out.state.board.get(key(2, 1))).toBe('WWRR')
     expect(out.state.history.at(-1)!.placed.filter((p) => p.forced)).toHaveLength(2)
   })
 
   it('rejects a move that forces an impossible space', () => {
-    // Placing WRRW at (2,1) gives (1,1) a third white edge (after the white
-    // edges from (1,0) and (0,1)) - no tile has three white edges.
+    // Placing RRWW at (2,-1) gives (1,-1) a third white edge (after the white
+    // edges from (1,0) and (0,-1)) - no tile has three white edges.
     const s0 = stateWith([
       [1, 0, 'WRWR'],
-      [0, 1, 'RWRW'],
+      [0, -1, 'RWRW'],
       [2, 0, 'WRWR'],
     ])
-    const out = applyMove(s0, m(2, 1, 'WRRW'))
+    const out = applyMove(s0, m(2, -1, 'RRWW'))
     expect(out.ok).toBe(false)
     if (!out.ok) expect(out.reason).toMatch(/no tile can fill/)
   })
@@ -101,9 +101,9 @@ describe('forced play', () => {
 
 describe('winning', () => {
   it('detects a loop completed by a forced tile, won by the mover', () => {
-    // White's third move (WRRW at (0,1)) forces WWRR at (-1,1), closing a
+    // White's third move (RRWW at (0,-1)) forces RWWR at (-1,-1), closing a
     // 2x2 white loop.
-    const s = play(newGame(), [m(0, 0, 'RRWW'), m(-1, 0, 'RWWR'), m(0, 1, 'WRRW')])
+    const s = play(newGame(), [m(0, 0, 'WRRW'), m(-1, 0, 'WWRR'), m(0, -1, 'RRWW')])
     expect(s.result).not.toBeNull()
     expect(s.result!.winner).toBe('W')
     expect(s.result!.reason).toBe('loop')
@@ -114,12 +114,12 @@ describe('winning', () => {
     // Same position, but now it is Red who plays the closing move.
     const s0 = stateWith(
       [
-        [0, 0, 'RRWW'],
-        [-1, 0, 'RWWR'],
+        [0, 0, 'WRRW'],
+        [-1, 0, 'WWRR'],
       ],
       'R',
     )
-    const out = applyMove(s0, m(0, 1, 'WRRW'))
+    const out = applyMove(s0, m(0, -1, 'RRWW'))
     expect(out.ok && out.state.result?.winner).toBe('W')
   })
 
@@ -148,15 +148,15 @@ describe('winning', () => {
   })
 
   it('handles resignation', () => {
-    const s = resign(play(newGame(), [m(0, 0, 'RRWW')]), 'R')
+    const s = resign(play(newGame(), [m(0, 0, 'WRRW')]), 'R')
     expect(s.result).toEqual({ winner: 'W', reason: 'resignation', paths: [] })
   })
 })
 
 describe('boardAtPly', () => {
   it('rebuilds every intermediate position, including forced tiles', () => {
-    // The third move forces a tile at (1,-1); replaying `placed` must include it.
-    const moves = [m(0, 0, 'RRWW'), m(1, 0, 'WRWR'), m(0, -1, 'RWRW')]
+    // The third move forces a tile at (1,1); replaying `placed` must include it.
+    const moves = [m(0, 0, 'WRRW'), m(1, 0, 'WRWR'), m(0, 1, 'RWRW')]
     const states = [newGame()]
     for (const mv of moves) states.push(play(states.at(-1)!, [mv]))
     const final = states.at(-1)!
@@ -168,7 +168,7 @@ describe('boardAtPly', () => {
 
 describe('stateAtPly', () => {
   it('rebuilds every intermediate state, matching board, turn, and hash', () => {
-    const moves = [m(0, 0, 'RRWW'), m(1, 0, 'WRWR'), m(0, -1, 'RWRW')]
+    const moves = [m(0, 0, 'WRRW'), m(1, 0, 'WRWR'), m(0, 1, 'RWRW')]
     const states = [newGame()]
     for (const mv of moves) states.push(play(states.at(-1)!, [mv]))
     const final = states.at(-1)!
@@ -185,12 +185,12 @@ describe('stateAtPly', () => {
 describe('hashState', () => {
   it('is independent of board insertion order and sensitive to turn', () => {
     const a = stateWith([
-      [0, 0, 'RRWW'],
+      [0, 0, 'WRRW'],
       [1, 0, 'WRWR'],
     ])
     const b = stateWith([
       [1, 0, 'WRWR'],
-      [0, 0, 'RRWW'],
+      [0, 0, 'WRRW'],
     ])
     expect(hashState(a)).toBe(hashState(b))
     expect(hashState(a)).not.toBe(hashState({ ...a, turn: 'R' }))

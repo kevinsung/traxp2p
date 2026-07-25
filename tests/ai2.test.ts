@@ -51,8 +51,8 @@ const testLimits = (seed: number, extra?: Partial<SearchLimits>): SearchLimits =
 
 // White one move from a loop (same position as tests/ai.test.ts).
 const nearLoop: Array<[number, number, TileKind]> = [
-  [0, 0, 'RRWW'],
-  [-1, 0, 'RWWR'],
+  [0, 0, 'WRRW'],
+  [-1, 0, 'WWRR'],
 ]
 
 describe('search2 chooseMove', () => {
@@ -77,7 +77,7 @@ describe('search2 chooseMove', () => {
   })
 
   it('returns null when the game is over', () => {
-    const won = play(newGame(), [m(0, 0, 'RRWW'), m(-1, 0, 'RWWR'), m(0, 1, 'WRRW')])
+    const won = play(newGame(), [m(0, 0, 'WRRW'), m(-1, 0, 'WWRR'), m(0, -1, 'RRWW')])
     expect(won.result).not.toBeNull()
     expect(chooseMove(won, testLimits(3))).toBeNull()
   })

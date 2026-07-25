@@ -44,10 +44,10 @@ const testLimits = (seed: number, extra?: Partial<SearchLimits>): SearchLimits =
 })
 
 // White one move from a loop: its track through (0,0)-(-1,0) has both ends
-// pointing south into adjacent cells (see the engine tests' loop scenario).
+// pointing north into adjacent cells (see the engine tests' loop scenario).
 const nearLoop: Array<[number, number, TileKind]> = [
-  [0, 0, 'RRWW'],
-  [-1, 0, 'RWWR'],
+  [0, 0, 'WRRW'],
+  [-1, 0, 'WWRR'],
 ]
 
 describe('positionHash', () => {
@@ -57,8 +57,8 @@ describe('positionHash', () => {
     expect(positionHash(a.board, 'W')).toBe(positionHash(b.board, 'W'))
     expect(positionHash(a.board, 'W')).not.toBe(positionHash(a.board, 'R'))
     const c = stateWith([
-      [0, 0, 'RRWW'],
-      [-1, 0, 'WWRR'],
+      [0, 0, 'WRRW'],
+      [-1, 0, 'RWWR'],
     ])
     expect(positionHash(c.board, 'W')).not.toBe(positionHash(a.board, 'W'))
   })
@@ -72,8 +72,8 @@ describe('evaluate', () => {
     expect(white).toHaveLength(1)
     expect(white[0].cells).toBe(2)
     expect(white[0].spanX).toBe(2)
-    expect(new Set(white[0].exits!.map((e) => key(e.x, e.y)))).toEqual(new Set(['0,1', '-1,1']))
-    expect(white[0].dirs).toEqual([2, 2]) // both ends leave southward
+    expect(new Set(white[0].exits!.map((e) => key(e.x, e.y)))).toEqual(new Set(['0,-1', '-1,-1']))
+    expect(white[0].dirs).toEqual([0, 0]) // both ends leave northward
   })
 
   it('scores a converged loop threat strongly and antisymmetrically', () => {
@@ -141,7 +141,7 @@ describe('chooseMove', () => {
   })
 
   it('returns null when the game is over', () => {
-    const won = play(newGame(), [m(0, 0, 'RRWW'), m(-1, 0, 'RWWR'), m(0, 1, 'WRRW')])
+    const won = play(newGame(), [m(0, 0, 'WRRW'), m(-1, 0, 'WWRR'), m(0, -1, 'RRWW')])
     expect(won.result).not.toBeNull()
     expect(chooseMove(won, testLimits(3))).toBeNull()
   })
@@ -218,9 +218,9 @@ describe('chooseMove', () => {
 
 describe('undoTo', () => {
   const s0 = newGame()
-  const s1 = play(s0, [m(0, 0, 'RRWW')]) // W moved; R to play
+  const s1 = play(s0, [m(0, 0, 'WRRW')]) // W moved; R to play
   const s2 = play(s1, [m(1, 0, 'WRWR')]) // R moved; W to play
-  const s3 = play(s2, [m(0, -1, 'RWRW')]) // W moved; R to play
+  const s3 = play(s2, [m(0, 1, 'RWRW')]) // W moved; R to play
 
   it('removes a full human+AI exchange', () => {
     expect(undoTo([s0, s1, s2, s3], 'W')).toEqual([s0, s1, s2])
@@ -233,9 +233,9 @@ describe('undoTo', () => {
   })
 
   it('rewinds past a finished game to a live human turn', () => {
-    const w1 = play(s0, [m(0, 0, 'RRWW')])
-    const w2 = play(w1, [m(-1, 0, 'RWWR')])
-    const w3 = play(w2, [m(0, 1, 'WRRW')]) // white closes its loop
+    const w1 = play(s0, [m(0, 0, 'WRRW')])
+    const w2 = play(w1, [m(-1, 0, 'WWRR')])
+    const w3 = play(w2, [m(0, -1, 'RRWW')]) // white closes its loop
     expect(w3.result?.winner).toBe('W')
     expect(undoTo([s0, w1, w2, w3], 'W')).toEqual([s0, w1, w2])
     expect(undoTo([s0, w1, w2, w3], 'R')).toEqual([s0, w1])

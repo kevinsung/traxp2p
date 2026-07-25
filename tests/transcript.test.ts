@@ -57,7 +57,7 @@ describe('transcript', () => {
   })
 
   it('tolerates surrounding whitespace and multiple spaces', () => {
-    const s1 = applyMove(newGame(), { x: 0, y: 0, tile: 'RRWW' })
+    const s1 = applyMove(newGame(), { x: 0, y: 0, tile: 'WRRW' })
     if (!s1.ok) throw new Error(s1.reason)
     const s2 = applyMove(s1.state, { x: 1, y: 0, tile: 'WRWR' })
     if (!s2.ok) throw new Error(s2.reason)
