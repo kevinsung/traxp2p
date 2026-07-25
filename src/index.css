@@ -885,15 +885,3 @@ h3 {
     font-size: 0.8rem;
   }
 }
-
-/* ---------- reduced motion ---------- */
-
-@media (prefers-reduced-motion: reduce) {
-  .turn-dot,
-  .track-win,
-  .tile-pop,
-  .last-move,
-  .dots::after {
-    animation: none;
-  }
-}
