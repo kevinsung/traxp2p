@@ -17,18 +17,25 @@ stronger" from "just got lucky."
 - **`playGame` / `playMatch`** (`src/ai/arena.ts`) — the reusable match runner. `playMatch`
   plays `games` games, swapping who plays White every other game so first-move advantage
   cancels out, and returns a `MatchReport` with win/loss/draw counts, a score for agent A,
-  and a 95% confidence interval on that score.
+  and a 95% confidence interval on that score. Underneath, `playGames` runs any contiguous
+  range of game indices into a mergeable `MatchTally`, which is what makes `--jobs` possible.
 
 ## Running the CLI
 
 ```bash
 npm run arena -- <agentA> <agentB> [--games N] [--ply N] [--seed N] [--budget MS]
+                                   [--nodes N] [--jobs N|auto]
 ```
 
 - `--games` (default 50) — number of games to play.
 - `--ply` (default 300) — a game that runs this long without a result is scored a draw.
 - `--seed` (default 1) — seeds the whole match; same seed + same agents ⇒ identical report.
 - `--budget` — overrides `budgetMs` for search agents, so you can compare at equal think time.
+- `--nodes` — caps `maxNodes` per move, so strength is compared at equal *work* instead of
+  equal wall-clock. This is what you want whenever the machine is busy — including any run
+  with `--jobs > 1`.
+- `--jobs` (default 1) — play the match across N processes; `auto` uses one fewer than the
+  machine's cores. See below.
 
 Example output:
 
@@ -45,6 +52,37 @@ Read the **score** and **confidence interval** together: an agent is meaningfull
 only when its score is clearly above 50% *and* the interval excludes 50%. If the CI still
 straddles 50%, run more games rather than trusting the point estimate.
 
+## Running matches in parallel
+
+Games are independent, so `--jobs N` splits `[0, games)` into N contiguous ranges of game
+indices and hands each range to a child `tsx` process running `scripts/arena.ts` in shard
+mode. Each child plays its range single-threaded and prints a tally (counts only, no
+per-game data); the parent merges the tallies and computes one report from the totals, so
+the numbers are exactly what a sequential run of the same games would produce. Progress goes
+to stderr, leaving stdout as the plain report. If any child exits non-zero or fails to
+report a full tally, the whole run fails with that child's stderr — you never get a quietly
+short match.
+
+Children are processes rather than threads because the search modules keep module-level
+mutable state (a 24 MB transposition table, eval caches, scratch buffers explicitly written
+for a single-threaded search). Separate processes isolate that for free.
+
+Pick a job count from cores, not from games: `--jobs auto` (cores − 1) is the usual choice;
+values above `--games` are clamped. On a 16-core box a 200-game match drops from ~20 minutes
+to a couple of minutes. Two things to keep in mind:
+
+1. **`--budget` is wall-clock, so it does not survive parallelism.** With J games running at
+   once, each process may search far less per move than it would alone — and how much less
+   depends on the machine's load. Time-budgeted results are therefore *not* comparable across
+   job counts or across machines. Use `--nodes` for load-independent, apples-to-apples
+   strength comparisons; keep `--budget` for answering "how strong is it at 1.5 s of real
+   think time", and run that one at `--jobs 1`.
+2. **The transposition table is per process.** The seed and color assignment of each game
+   index are identical at any `--jobs`, but *which* games share a TT changes, so individual
+   games can end differently at `--jobs 1` and `--jobs 8` for search agents. Aggregate scores
+   are unaffected in expectation; a bit-identical rerun needs the same `--jobs`. (Agents with
+   no state — `random` — are bit-identical at any job count.)
+
 ## Adding and testing a new AI
 
 1. **Create the variant.** Copy the piece you want to change into a new module — e.g.
@@ -60,12 +98,14 @@ straddles 50%, run more games rather than trusting the point estimate.
 3. **Sanity-check vs random** (fast): `npm run arena -- v2 random --games 40`. A serious AI
    should crush random, the way `current` does.
 4. **Head-to-head vs current** (the real test):
-   `npm run arena -- v2 current --games 200 --seed 1`.
+   `npm run arena -- v2 current --games 200 --seed 1 --nodes 20000 --jobs auto`.
    Colors swap automatically each game, so the result isn't an artifact of who moved first.
-5. **Control for think time.** Compare at equal budgets: `--budget 1500` on both sides. If v2
-   only wins because it searches longer, that's a speed result, not a strength one — re-run
-   at matched budgets (and optionally matched node caps, if your variant exposes them) to
-   isolate quality from compute.
+   `--nodes` keeps the comparison fair while all cores are busy, and `--jobs auto` is what
+   makes 200 games cheap enough to actually run — don't settle for 40 games here.
+5. **Control for think time.** The head-to-head above compares quality at equal *work*. To
+   also check speed, re-run at equal wall-clock — `--budget 1500`, `--jobs 1` — since a
+   time budget means nothing when processes are competing for cores. If v2 only wins on the
+   budgeted run, that's a speed result, not a strength one.
 6. **Confirm robustness.** Re-run with 1–2 other `--seed` values and a larger `--games` to
    make sure the edge holds and isn't seed noise. Only promote once it does.
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { randomAgent, searchAgent } from '../src/ai/agent'
-import { playMatch } from '../src/ai/arena'
+import { gameSeeds, mergeTallies, playGames, playMatch, summarize } from '../src/ai/arena'
 import { chooseMove } from '../src/ai/search'
 import type { SearchLimits } from '../src/ai/search'
 
@@ -44,6 +44,34 @@ describe('arena', () => {
     const b = searchAgent('current', chooseMove, smokeLimits)
     const report = playMatch(a, b, { games: 1, plyLimit: 20, seed: 7 })
     expect(report.aWins + report.bWins + report.draws).toBe(1)
+  })
+
+  /**
+   * These use random agents on both sides deliberately: no search means no
+   * module-level state (transposition table, eval caches), so splitting a
+   * match into shards is exactly equal to running it in one piece — the
+   * property `--jobs N` in scripts/arena.ts relies on.
+   */
+  it('plays the same match whether or not it is split into shards', () => {
+    const a = randomAgent('a')
+    const b = randomAgent('b')
+    const opts = { games: 8, plyLimit: 100, seed: 5 }
+
+    const whole = playGames(a, b, { ...opts, start: 0, count: 8 })
+    const sharded = mergeTallies([
+      playGames(a, b, { ...opts, start: 0, count: 3 }),
+      playGames(a, b, { ...opts, start: 3, count: 5 }),
+    ])
+
+    expect(sharded).toEqual(whole)
+    expect(summarize('a', 'b', sharded)).toEqual(playMatch(a, b, opts))
+  })
+
+  it('derives stable per-game seeds independent of match length', () => {
+    const seeds = gameSeeds(9, 6)
+    expect(gameSeeds(9, 6)).toEqual(seeds)
+    expect(gameSeeds(9, 10).slice(0, 6)).toEqual(seeds)
+    expect(gameSeeds(10, 6)).not.toEqual(seeds)
   })
 
   it('rejects a zero-game match', () => {

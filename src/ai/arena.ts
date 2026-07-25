@@ -54,6 +54,29 @@ export interface PlayMatchOptions {
   seed?: number
 }
 
+export interface PlayGamesOptions extends PlayMatchOptions {
+  /** First global game index to play. Default 0. */
+  start?: number
+  /** How many games to play from `start`. Default: the rest of the match. */
+  count?: number
+  /** Called after each game, with its global index. */
+  onGame?: (index: number, outcome: GameOutcome) => void
+}
+
+/**
+ * Counts from a set of games, mergeable across shards. Everything a
+ * MatchReport needs is derivable from these — a 3-valued score has an exact
+ * variance given the counts — so shards can be summed instead of shipping
+ * per-game results around.
+ */
+export interface MatchTally {
+  games: number
+  aWins: number
+  bWins: number
+  draws: number
+  totalPlies: number
+}
+
 export interface MatchReport {
   a: string
   b: string
@@ -77,50 +100,69 @@ export interface MatchReport {
 const Z95 = 1.959963985
 
 /**
- * Play a full match of `games` games between two agents, swapping who plays
- * White every other game so first-move advantage cancels out of the result.
- * Deterministic for a given seed: same seed + same agents => identical report.
+ * The per-game seeds of a match, derived up front rather than inside the game
+ * loop so any contiguous slice of a match can be replayed on its own: game `g`
+ * gets `gameSeeds(seed, games)[g]` no matter how the games are split up.
  */
-export function playMatch(a: Agent, b: Agent, opts: PlayMatchOptions): MatchReport {
-  if (opts.games < 1) throw new Error('playMatch requires at least one game')
+export function gameSeeds(seed: number, games: number): number[] {
+  const matchRand = mulberry32(seed)
+  return Array.from({ length: games }, () => Math.floor(matchRand() * 0xffffffff))
+}
+
+/**
+ * Play global game indices `[start, start + count)` of a `games`-game match.
+ * Both the seed and the color assignment key off the global index, so a shard
+ * plays exactly the games it would have played inside the full sequential run.
+ */
+export function playGames(a: Agent, b: Agent, opts: PlayGamesOptions): MatchTally {
   const plyLimit = opts.plyLimit ?? 300
-  const matchRand = mulberry32(opts.seed ?? 1)
+  const seeds = gameSeeds(opts.seed ?? 1, opts.games)
+  const start = opts.start ?? 0
+  const end = start + (opts.count ?? opts.games - start)
 
-  let aWins = 0
-  let bWins = 0
-  let draws = 0
-  let totalPlies = 0
-  const scores: number[] = []
-
-  for (let g = 0; g < opts.games; g++) {
-    const gameSeed = Math.floor(matchRand() * 0xffffffff)
-    const rand = mulberry32(gameSeed)
+  const tally: MatchTally = { games: 0, aWins: 0, bWins: 0, draws: 0, totalPlies: 0 }
+  for (let g = start; g < end; g++) {
+    const rand = mulberry32(seeds[g])
     const swap = g % 2 === 1
     const outcome = swap ? flip(playGame(b, a, { plyLimit, rand })) : playGame(a, b, { plyLimit, rand })
-    totalPlies += outcome.plies
 
-    if (outcome.winner === null) {
-      draws++
-      scores.push(0.5)
-    } else if (outcome.winner === 'A') {
-      aWins++
-      scores.push(1)
-    } else {
-      bWins++
-      scores.push(0)
-    }
+    tally.games++
+    tally.totalPlies += outcome.plies
+    if (outcome.winner === null) tally.draws++
+    else if (outcome.winner === 'A') tally.aWins++
+    else tally.bWins++
+    opts.onGame?.(g, outcome)
   }
+  return tally
+}
 
-  const n = opts.games
-  const mean = scores.reduce((s, x) => s + x, 0) / n
-  const variance = scores.reduce((s, x) => s + (x - mean) ** 2, 0) / n
+/** Sum shard tallies into the tally of the whole match. */
+export function mergeTallies(tallies: MatchTally[]): MatchTally {
+  return tallies.reduce(
+    (acc, t) => ({
+      games: acc.games + t.games,
+      aWins: acc.aWins + t.aWins,
+      bWins: acc.bWins + t.bWins,
+      draws: acc.draws + t.draws,
+      totalPlies: acc.totalPlies + t.totalPlies,
+    }),
+    { games: 0, aWins: 0, bWins: 0, draws: 0, totalPlies: 0 },
+  )
+}
+
+/** Turn counts into the reported score, confidence interval, and averages. */
+export function summarize(aName: string, bName: string, tally: MatchTally): MatchReport {
+  const { games: n, aWins, bWins, draws } = tally
+  const mean = (aWins + 0.5 * draws) / n
+  // Population variance of a score that is only ever 1, 0.5, or 0.
+  const variance = (aWins * (1 - mean) ** 2 + draws * (0.5 - mean) ** 2 + bWins * mean ** 2) / n
   const stderr = Math.sqrt(variance / n)
   const margin = Z95 * stderr
   const confidenceInterval: [number, number] = [Math.max(0, mean - margin), Math.min(1, mean + margin)]
 
   return {
-    a: a.name,
-    b: b.name,
+    a: aName,
+    b: bName,
     games: n,
     aWins,
     bWins,
@@ -128,8 +170,18 @@ export function playMatch(a: Agent, b: Agent, opts: PlayMatchOptions): MatchRepo
     scoreForA: mean,
     confidenceInterval,
     significant: confidenceInterval[0] > 0.5 || confidenceInterval[1] < 0.5,
-    avgPlies: totalPlies / n,
+    avgPlies: tally.totalPlies / n,
   }
+}
+
+/**
+ * Play a full match of `games` games between two agents, swapping who plays
+ * White every other game so first-move advantage cancels out of the result.
+ * Deterministic for a given seed: same seed + same agents => identical report.
+ */
+export function playMatch(a: Agent, b: Agent, opts: PlayMatchOptions): MatchReport {
+  if (opts.games < 1) throw new Error('playMatch requires at least one game')
+  return summarize(a.name, b.name, playGames(a, b, { ...opts, start: 0, count: opts.games }))
 }
 
 /** Relabel an outcome from a (b, a)-seated game back to the (a, b) frame. */
