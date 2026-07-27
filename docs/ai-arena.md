@@ -109,10 +109,35 @@ to a couple of minutes. Two things to keep in mind:
 6. **Confirm robustness.** Re-run with 1–2 other `--seed` values and a larger `--games` to
    make sure the edge holds and isn't seed noise. Only promote once it does.
 
+### How many games you actually need
+
+Eval tweaks here move the score by ~2–5%, and the 95% CI at 300 games is ±5.6% — wider than
+the signal. A 300-game match will therefore report "significant at 95%" on pure noise, in
+both directions. Measured while gating the `loopDouble` term: the *same* config scored 56.3%
+at 300 games and 49.7% at 600 games on one seed, while two other seeds gave ~54% at 1000.
+
+So: **screen at 300 games** to rank configurations and throw out clear losers, then **gate at
+≥1000 games on ≥2 seeds**, and pool the raw counts across seeds before deciding. Since
+`--jobs auto` a 1000-game node-capped match is minutes, so there is no reason to gate on less.
+
+### Hold `--jobs` fixed across a comparison
+
+Each shard is a process with its own transposition table, so `--jobs` decides how many games
+share one: at 1000 games, `--jobs 30` gives ~33 games per table and `--jobs 60` gives ~17.
+More sharing is more knowledge carried between games, i.e. a stronger agent. In a symmetric
+self-play match this cancels, which is why the arena never shows it — but against a **fixed
+external opponent it does not**. Measured 2026-07-26 against `trax-analyst`: the same build,
+same seed, 1000 games scored **76.4% at `--jobs 60` and 79.7% at `--jobs 30`**.
+
+Fix `--jobs` for every run in a comparison and record it beside the score. This rules out
+`--jobs auto` for such benchmarks, since its value depends on the machine. If a delta looks
+surprising, re-run the *old* build under the new settings first — if it does not reproduce,
+the comparison is confounded, not the build.
+
 ## Promoting a new AI to replace the current one
 
 The app reaches the AI in exactly one place: `src/ai/worker.ts` imports `chooseMove` from
-`src/ai/search.ts` and calls it with `AI_LIMITS`. That single import is the swap point — the
+`src/ai/search2.ts` and calls it with `AI_LIMITS`. That single import is the swap point — the
 UI, hooks (`src/hooks/useAIGame.ts`), and worker protocol (`src/ai/protocol.ts`) are all
 agnostic to which search runs underneath. To make `v2` the app's opponent:
 
@@ -131,3 +156,59 @@ agnostic to which search runs underneath. To make `v2` the app's opponent:
 
 Follow this same recipe for every future swap, so `current` in the registry always tracks
 whatever the app actually ships.
+
+## Promotion log
+
+- **2026-07-12 — v2 (FastBoard search)** replaced v1: 82% at 300 ms, 93% at 1 s.
+- **2026-07-25 — `WEIGHTS.loopDouble`** added to `src/ai/eval.ts` (and its twin in
+  `search2.ts`). Motivation: against `@slugbugblue/trax-analyst` essentially every loss was
+  the analyst completing a *loop*, and we lost twice as often moving second. `linePotential`
+  already had a "can't block both" cliff (`lineDouble`); loop threats had none, so two
+  simultaneous loop threats merely added to 200. The term scores a side holding ≥2 threats
+  that each complete in one move — counting loop and line threats together, so loop+line
+  forks fire too.
+
+  Gated as a separate module against the pre-term build: **53.1%** over 4000 games at
+  `--nodes 20000` (3 seeds, CI 51.5–54.6) and **54.1%** over 1300 games at `--budget 1500`
+  (2 seeds, CI 51.4–56.8). At `--nodes 100000` it was 51.9% over 2400 games (CI 49.9–53.9) —
+  positive but *not* significant; recorded here as the one leg that did not clear. Against
+  the analyst directly, 59.0% → 63.0%, with losses-as-second-player falling 57 → 47 of 200.
+
+  Two things that did **not** work and should not be retried blind: counting threats whose
+  ends are two steps apart rather than one (43–48%, clearly worse — detection precision is
+  the lever, not magnitude), and raising the weight beyond `lineDouble`'s 10 000 (no
+  consistent gain from 50 000 or 500 000).
+
+- **2026-07-26 — verified one-move closability** (`closesInOne` in `src/ai/eval.ts` and its
+  twin in `search2.ts`), plus `AI_LIMITS.topMargin` 5 → 1.
+
+  The previous entry was right that detection *precision* is the lever, and this measures how
+  far off it was. Scored against ground truth over 6628 positions from games lost to
+  `trax-analyst`, the geometric "ends one step apart" test has 91% recall but **22%
+  precision**; the two-threat cliff it feeds fires on 5.7% of positions and is wrong 64% of
+  the time. Separately, the static eval called a position decisive in only **32%** of the
+  positions where the side to move could win outright — and 94% of those losses ended in
+  exactly such a position.
+
+  So the geometry is kept as a *candidate generator* and the question is settled by playing
+  the move: for a flagged track belonging to the side to move, try the tiles on its two exit
+  cells and their neighbours (79% of real winning moves land on an exit cell, 21% adjacent),
+  and if one truly closes the track, the position is won. As a win-in-1 detector that is 100%
+  precise at 85% recall, and it buys a search leaf one ply on the only motif that matters.
+
+  Against `trax-analyst` (which is a *1-ply* engine that also picks at random within 5 points
+  of best — benchmark it as `suggest().pick` with `Math.random` seeded, not as `.all[0]`):
+  **78.9% → 82.3%** over 4000 games × 4 seeds at `--nodes 20000` (+3.4, CI 1.7–5.2) and
+  **83.0% → 86.6%** over 2100 games × 7 seeds at `--budget 1500` (+3.6, CI 1.5–5.8). Split:
+  the eval term is +2.0 (CI 0.3–3.8), `topMargin` is +1.4 (CI −0.3–3.1, not significant alone
+  but never negative across seeds; 1 still breaks genuine ties, so move variety survives).
+  It is **level in self-play** (51.8% over 2000 games) — a symmetric tactical gain largely
+  cancels there, so do not expect the arena to show it. Costs ~2x per eval and still wins on
+  wall clock.
+
+  Rejected on the way: penalising a threat the *opponent* holds (−10pt in self-play at 200),
+  and replacing the imprecise 2-threat cliff with the verified one instead of adding to it
+  (−10pt — converging ends have positional value even when they do not close this move).
+
+  Residual losses are now dominated by a *single* unstoppable threat (117 of 180), not double
+  threats, so one more ply of vision will not touch them.

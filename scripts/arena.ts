@@ -41,6 +41,10 @@ function buildRegistry(limits: SearchLimits): Record<string, Agent> {
     // `current` tracks what the app ships (src/ai/worker.ts): the FastBoard
     // search. `v1` is the previous engine-based search, kept as a regression
     // baseline (promoted 2026-07-12: v2 beat v1 82% at 300ms, 93% at 1s).
+    //
+    // eval's loopDouble term promoted 2026-07-25: 53.1% over 4000 games at
+    // --nodes 20000 (3 seeds, CI 51.5-54.6) and 54.1% over 1300 games at
+    // --budget 1500 (2 seeds, CI 51.4-56.8) against the pre-term build.
     current: searchAgent('current', chooseMoveV2, limits),
     v1: searchAgent('v1', chooseMoveV1, limits),
     random: randomAgent('random'),

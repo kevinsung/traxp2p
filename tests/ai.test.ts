@@ -109,6 +109,44 @@ describe('evaluate', () => {
     expect(evaluate(capped, 'W')).toBeLessThan(WEIGHTS.line * 2)
   })
 
+  it('scores two one-move loop threats as practically decided', () => {
+    // Red to move throughout, so white's threats are ones red still gets to
+    // answer — with white to move a single closable track is simply a win, and
+    // that is the case below. One converged white track is just a threat; two
+    // independent ones cannot both be blocked with a single move, so the second
+    // must push the score over the loopDouble cliff.
+    const one = stateWith(nearLoop, 'R')
+    const two = stateWith([...nearLoop, [0, 5, 'WRRW'], [-1, 5, 'WWRR']] as typeof nearLoop, 'R')
+    expect(evaluate(one, 'W')).toBeLessThan(WEIGHTS.loopDouble / 2)
+    expect(evaluate(two, 'W')).toBeGreaterThan(WEIGHTS.loopDouble / 2)
+    expect(evaluate(two, 'R')).toBe(-evaluate(two, 'W'))
+  })
+
+  it('scores a verified one-move loop for the side to move as won', () => {
+    // The same single threat, but white has the move: the loop really does
+    // close in one, so white just plays it. This is the term that lets a search
+    // leaf see one ply past its horizon on the motif that decides almost every
+    // game lost to trax-analyst.
+    const state = stateWith(nearLoop, 'W')
+    expect(evaluate(state, 'W')).toBe(WEIGHTS.winInOne)
+    expect(evaluate(state, 'R')).toBe(-WEIGHTS.winInOne)
+    // Ends that merely look close are not enough — the check plays the move.
+    const apart = stateWith([[0, 0, 'WWRR']], 'W')
+    expect(evaluate(apart, 'W')).toBeLessThan(WEIGHTS.loopDouble / 2)
+  })
+
+  it('does not fire loopDouble on threats that are merely close', () => {
+    // Each lone red curve has its ends two steps apart (loop/4, not loop), so
+    // a board full of them stays far below the cliff — the tight threshold is
+    // deliberate: the looser reading measurably weakened the AI in the arena.
+    const curves = stateWith([
+      [0, 0, 'WWRR'],
+      [0, 5, 'WWRR'],
+      [0, 10, 'WWRR'],
+    ])
+    expect(Math.abs(evaluate(curves, 'W'))).toBeLessThan(WEIGHTS.loopDouble / 2)
+  })
+
   it('gives a straight-through track no loop-threat value', () => {
     // A single cross carries two straight tracks; neither can ever loop
     // without help, so the position should be nearly balanced.

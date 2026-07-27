@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { components, WIN_SCORE } from '../src/ai/eval'
-import { chooseMove } from '../src/ai/search2'
+import { components, evaluate, WIN_SCORE } from '../src/ai/eval'
+import { FastBoard } from '../src/ai/fastboard'
+import { chooseMove, evalWhite } from '../src/ai/search2'
 import type { SearchLimits } from '../src/ai/search'
 import { key } from '../src/game/board'
 import { applyMove, newGame, otherColor } from '../src/game/engine'
@@ -171,5 +172,39 @@ describe('search2 chooseMove', () => {
     }
     expect(losses).toBe(0)
     expect(wins).toBeGreaterThanOrEqual(6)
+  })
+})
+
+/**
+ * eval.ts's evaluate() and search2.ts's evalWhite() are hand-maintained twins:
+ * the same heuristic written once over the immutable engine board and once over
+ * FastBoard. Nothing but comments held them equal, so any edit to one could
+ * silently drift from the other — these cases are that missing guard.
+ */
+describe('evalWhite mirrors eval.ts evaluate', () => {
+  it('agrees with evaluate() across random positions, for both colors', () => {
+    let checked = 0
+    for (let seed = 1; seed <= 30; seed++) {
+      const rand = rng(seed)
+      let state = newGame()
+      for (let ply = 0; ply < 40 && !state.result; ply++) {
+        const moves = legalMoves(state)
+        state = play(state, [moves[Math.floor(rand() * moves.length)]])
+        if (state.result) break
+        const white = evalWhite(FastBoard.fromState(state))
+        const where = `seed ${seed} ply ${ply}`
+        // Both sides sum the same per-component floats but visit components in
+        // a different order, so compare closely rather than bit-exactly.
+        expect(white, where).toBeCloseTo(evaluate(state, 'W'), 9)
+        expect(white, where).toBeCloseTo(-evaluate(state, 'R'), 9)
+        checked++
+      }
+    }
+    expect(checked).toBeGreaterThan(300)
+  })
+
+  it('tracks evaluate() on a converged loop threat', () => {
+    const s = stateWith(nearLoop, 'W')
+    expect(evalWhite(FastBoard.fromState(s))).toBeCloseTo(evaluate(s, 'W'), 9)
   })
 })

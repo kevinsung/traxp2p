@@ -1,7 +1,7 @@
 import { ALL_TILES } from '../game/tiles'
 import { LINE_SPAN } from '../game/wins'
 import { WEIGHTS, WIN_SCORE } from './eval'
-import { cellX, cellY, DELTA, DX, DY, FastBoard, ILLEGAL, OTHER_END, TILE_CODE } from './fastboard'
+import { cellOf, cellX, cellY, DELTA, DX, DY, FastBoard, ILLEGAL, OTHER_END, TILE_CODE } from './fastboard'
 import type { GameState, Move, TileKind } from '../game/types'
 import type { SearchLimits, SearchResult } from './search'
 
@@ -12,8 +12,23 @@ import type { SearchLimits, SearchResult } from './search'
  * Public shape matches v1 so it drops into searchAgent and the worker.
  */
 
-/** Fixed strength of the app's computer opponent (same budget as v1). */
-export const AI_LIMITS: SearchLimits = { budgetMs: 1500, maxDepth: 16, topMargin: 5 }
+/**
+ * Fixed strength of the app's computer opponent (same budget as v1).
+ *
+ * `topMargin` is the root's move-variety pool: it picks uniformly among moves
+ * within this many points of best, so the computer does not replay an identical
+ * game. Lowered from 5 to 1 on 2026-07-26: against trax-analyst that is 82.3%
+ * vs 80.9% (4000 games each, 4 seeds, --nodes 20000), i.e. +1.4pt with a 95% CI
+ * of -0.3 to 3.1 — positive or level on every seed but NOT significant on its
+ * own, and largely carried by one seed. 1 still breaks genuine ties at random,
+ * so the variety the pool exists for survives; 0 buys nothing further and would
+ * make the opponent fully deterministic.
+ *
+ * Beware measuring this: the score against a fixed opponent moves ~3pt with the
+ * arena's `--jobs` count, because shard size decides how many games share the
+ * transposition table. Only compare runs at equal --jobs.
+ */
+export const AI_LIMITS: SearchLimits = { budgetMs: 1500, maxDepth: 16, topMargin: 1 }
 
 // --- Evaluation: faithful int port of src/ai/eval.ts --------------------------
 
@@ -67,16 +82,55 @@ function axisPotential(span: number, openA: boolean, openB: boolean): number {
 }
 
 const evalVisited = new Set<number>()
+/** Flagged tracks awaiting verification: [color, exitCellA, exitCellB] triples. */
+const flagged: number[] = []
+/** Probe scratch: candidate cells for one track, deduped. */
+const probeCells = new Set<number>()
+
+/**
+ * Port of eval.ts closesInOne: can this track be completed by one legal move?
+ * Settled by playing the candidates on the board itself rather than measuring
+ * the gap between the ends. Turn-independent, so the eval cache stays keyed on
+ * position alone.
+ */
+function closesInOne(fb: FastBoard, color: number, cellA: number, cellB: number): boolean {
+  const cells = probeCells
+  cells.clear()
+  for (const c of [cellA, cellB]) {
+    if (!fb.tiles.has(c)) cells.add(c)
+    for (let d = 0; d < 4; d++) {
+      const n = c + DELTA[d]
+      if (!fb.tiles.has(n)) cells.add(n)
+    }
+  }
+  const want = color + 1 // FastBoard.make: 1 = W_WINS, 2 = R_WINS
+  for (const cell of cells) {
+    for (let t = 0; t < 6; t++) {
+      const status = fb.make(cell, t)
+      if (status === ILLEGAL) continue
+      fb.unmake()
+      if (status === want) return true
+    }
+  }
+  return false
+}
 
 /**
  * Heuristic score of a non-terminal position for White; identical math to
  * eval.ts evaluate (tempo + loop threats + end-aware line potential).
  * evaluate-for-color is this value negated for Red (antisymmetric).
+ *
+ * Exported only so tests/ai2.test.ts can differential-test it against eval.ts's
+ * evaluate(): the two are hand-maintained twins over different board
+ * representations, and nothing else was holding them equal.
  */
-function evalWhite(fb: FastBoard): number {
+export function evalWhite(fb: FastBoard): number {
   let score = fb.turn === 0 ? WEIGHTS.tempo : -WEIGHTS.tempo
+  /** Per color, tracks one move from completing — see eval.ts's loopDouble. */
+  const threats = [0, 0]
   const visited = evalVisited
   visited.clear()
+  flagged.length = 0
   for (const cell of fb.tiles.keys()) {
     const code = TILE_CODE[fb.tiles.get(cell)!]
     for (let color = 0; color < 2; color++) {
@@ -106,14 +160,29 @@ function evalWhite(fb: FastBoard): number {
         const eaY = cellY(aCell) + DY[aDir]
         const ebX = cellX(bCell) + DX[bDir]
         const ebY = cellY(bCell) + DY[bDir]
-        v += loopThreat(eaX, eaY, ebX, ebY, aDir, bDir)
+        const loop = loopThreat(eaX, eaY, ebX, ebY, aDir, bDir)
         const vert = axisPotential(compMaxY - compMinY + 1, eaY < compMinY || ebY < compMinY, eaY > compMaxY || ebY > compMaxY)
         const horiz = axisPotential(compMaxX - compMinX + 1, eaX < compMinX || ebX < compMinX, eaX > compMaxX || ebX > compMaxX)
-        v += Math.max(vert, horiz)
+        const line = Math.max(vert, horiz)
+        v = loop + line
+        if (loop >= WEIGHTS.loop || line >= WEIGHTS.lineDouble) {
+          threats[color]++
+          // Verified below, once the walk is done: closesInOne mutates fb, and
+          // this loop is iterating fb.tiles.
+          if (color === fb.turn) flagged.push(cellOf(eaX, eaY), cellOf(ebX, ebY))
+        }
       }
       score += color === 0 ? v : -v
     }
   }
+  const mover = fb.turn
+  for (let i = 0; i < flagged.length; i += 2) {
+    if (closesInOne(fb, mover, flagged[i], flagged[i + 1])) {
+      return mover === 0 ? WEIGHTS.winInOne : -WEIGHTS.winInOne
+    }
+  }
+  if (threats[0] >= 2) score += WEIGHTS.loopDouble
+  if (threats[1] >= 2) score -= WEIGHTS.loopDouble
   return score
 }
 

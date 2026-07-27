@@ -1,4 +1,6 @@
-import { neighbor, opposite, parseKey } from '../game/board'
+import { DIRS, key, neighbor, opposite, parseKey } from '../game/board'
+import { applyMove } from '../game/engine'
+import { ALL_TILES } from '../game/tiles'
 import { LINE_SPAN, trace } from '../game/wins'
 import type { Board, Color, Coord, Dir, GameState } from '../game/types'
 
@@ -14,6 +16,15 @@ export const WEIGHTS = {
   tempo: 10,
   /** A span-(LINE_SPAN-1) track open at both ends: completes at either end. */
   lineDouble: 10_000,
+  /** Two threats one move from completing: the opponent cannot block both. */
+  loopDouble: 10_000,
+  /**
+   * The side to move has a track that a single legal move really does close.
+   * Decisive — they simply play it — but deliberately far below WIN_SCORE, so
+   * a genuine mate score still outranks it and search keeps preferring the
+   * shorter win. See `closesInOne`.
+   */
+  winInOne: 500_000,
 }
 
 /** One color's connected track: its cells, extent, and where its ends point. */
@@ -113,19 +124,95 @@ function linePotential(comp: ComponentInfo): number {
 }
 
 /**
+ * Can `color`'s track, whose open ends point into `exits`, be completed by a
+ * single legal move? Answered by playing the candidate moves rather than by
+ * measuring the gap, so a forced-fill cascade that closes the loop counts and a
+ * pair of ends that merely *look* close does not.
+ *
+ * loopThreat's distance test is the candidate generator for this: measured over
+ * 6628 positions from games lost to trax-analyst it has 91% recall but only 22%
+ * precision, and the two-threat cliff it feeds is wrong 64% of the times it
+ * fires. Playing the move settles it exactly (100% precision, 85% recall as a
+ * win-in-1 detector).
+ *
+ * Candidates are the two exit cells plus their neighbors: of the winning moves
+ * in that corpus, 79% land on an exit cell and 21% land adjacent to one.
+ *
+ * Worth +2.0pt against trax-analyst (80.9% vs 78.9%, 4000 games each, 4 seeds,
+ * --nodes 20000, CI 0.3 to 3.8), and level in self-play against the build
+ * without it (51.8% over 2000 games). It roughly doubles the cost of an eval,
+ * but still comes out ahead at a fixed time budget. Mechanically it does what
+ * it was built to do: among the games still lost, positions where the analyst
+ * had two winning replies at once fell 41% (107 -> 63).
+ *
+ * Independent of whose turn it is — Trax legality is history-free and either
+ * player may place any tile — so this depends only on the position.
+ */
+function closesInOne(state: GameState, color: Color, exits: [Coord, Coord]): boolean {
+  const cells: Coord[] = []
+  const seen = new Set<string>()
+  for (const e of exits) {
+    for (const c of [e, ...DIRS.map((d) => neighbor(e.x, e.y, d))]) {
+      const k = key(c.x, c.y)
+      if (state.board.has(k) || seen.has(k)) continue
+      seen.add(k)
+      cells.push(c)
+    }
+  }
+  for (const c of cells) {
+    for (const tile of ALL_TILES) {
+      const out = applyMove(state, { x: c.x, y: c.y, tile })
+      if (out.ok && out.state.result?.winner === color) return true
+    }
+  }
+  return false
+}
+
+/**
  * Heuristic score of a non-terminal position for `forColor`, following Trax
  * strategy literature: attacking potential is tracks whose open ends converge
  * (loop threats, corners) plus tracks extending toward a LINE_SPAN line.
- * Antisymmetric: evaluate(s, c) === -evaluate(s, otherColor(c)).
+ *
+ * On top of the per-track terms, a side holding two threats that each complete
+ * in one move scores near-decisive: the opponent gets one move and cannot block
+ * both. This is the loop analog of linePotential's lineDouble cliff, and it
+ * counts loop and line threats together, so a loop+line fork also fires.
+ * `loopThreat >= WEIGHTS.loop` is exactly "ends one step apart" — the looser
+ * "two steps apart" reading measurably weakened the AI, so it stays tight.
+ *
+ * That geometric count is imprecise, though (22% of the tracks it flags can
+ * actually be closed), so it is used twice over: as the soft positional term
+ * above, and as the candidate list for an exact check. Any flagged track
+ * belonging to the side *to move* is verified with `closesInOne`, and a
+ * verified one is simply a win — they have the move. This is what lets a leaf
+ * see one ply further on the motif that decides almost every loss.
+ *
+ * Antisymmetric: evaluate(s, c) === -evaluate(s, otherColor(c)). Both the
+ * threat counts and the closability check depend only on the position, never
+ * on `forColor`.
  */
 export function evaluate(state: GameState, forColor: Color): number {
   let score = state.turn === forColor ? WEIGHTS.tempo : -WEIGHTS.tempo
+  let threatsFor = 0
+  let threatsAgainst = 0
+  const moverThreats: Array<[Coord, Coord]> = []
   for (const comp of components(state.board)) {
     const sign = comp.color === forColor ? 1 : -1
-    let v = 0
-    if (comp.exits) v += loopThreat(comp.exits, comp.dirs!)
-    v += linePotential(comp)
-    score += sign * v
+    const loop = comp.exits ? loopThreat(comp.exits, comp.dirs!) : 0
+    const line = linePotential(comp)
+    if (loop >= WEIGHTS.loop || line >= WEIGHTS.lineDouble) {
+      if (sign === 1) threatsFor++
+      else threatsAgainst++
+      if (comp.color === state.turn) moverThreats.push(comp.exits!)
+    }
+    score += sign * (loop + line)
   }
+  for (const exits of moverThreats) {
+    if (closesInOne(state, state.turn, exits)) {
+      return state.turn === forColor ? WEIGHTS.winInOne : -WEIGHTS.winInOne
+    }
+  }
+  if (threatsFor >= 2) score += WEIGHTS.loopDouble
+  if (threatsAgainst >= 2) score -= WEIGHTS.loopDouble
   return score
 }
