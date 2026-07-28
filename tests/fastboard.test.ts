@@ -173,6 +173,60 @@ describe('FastBoard differential vs engine', () => {
     }
   })
 
+  it('throws at the coordinate limit rather than wrapping the packed field', () => {
+    // The 10-bit encoding is what lets the track walks index a flat stamp array
+    // instead of hashing into a Set; the guard is what keeps a coordinate from
+    // silently wrapping into a *different* cell if a game ever ran that long.
+    const fb = new FastBoard()
+    for (const [x, y] of [
+      [511, 0],
+      [-511, 0],
+      [0, 511],
+      [0, -511],
+      [600, -700],
+    ]) {
+      expect(() => fb.make(cellOf(x, y), 0), `(${x}, ${y})`).toThrow(/out of range/)
+    }
+    // One inside the limit is a normal move — rejected here only because the
+    // first tile has to go on the origin.
+    expect(fb.make(cellOf(510, 0), 0)).toBe(ILLEGAL)
+    expect(fb.make(cellOf(0, 0), 0)).not.toBe(ILLEGAL)
+  })
+
+  it('keeps moves() isolated from the win-detection scratch across make/unmake', () => {
+    // moves() used to share detectWins' visited Set, which was safe only while
+    // every caller drained the move list before its first make(). Nothing
+    // enforced that, so this pins the property down: generating moves, playing
+    // and undoing each of them (every make() runs the cascade and win
+    // detection, and generates again one ply deeper), and generating once more
+    // must reproduce the original list exactly.
+    const rand = mulberry32(4242)
+    let state = newGame()
+    for (let ply = 0; ply < 14 && !state.result; ply++) {
+      const moves = legalMoves(state)
+      const out = applyMove(state, moves[Math.floor(rand() * moves.length)])
+      if (!out.ok) throw new Error('random legal move rejected')
+      state = out.state
+    }
+
+    const fb = FastBoard.fromState(state)
+    const before: number[] = []
+    fb.moves(before)
+    const snapshot = [...before]
+    expect(snapshot.length).toBeGreaterThan(0)
+
+    const inner: number[] = []
+    for (const packed of snapshot) {
+      if (fb.make(packed >>> 3, packed & 7) === ILLEGAL) continue
+      fb.moves(inner) // nested generation from the child position
+      fb.unmake()
+    }
+
+    const after: number[] = []
+    fb.moves(after)
+    expect(after).toEqual(snapshot)
+  })
+
   it('round-trips fromState/toBoard on a nontrivial position', () => {
     const state = newGame()
     let s = state

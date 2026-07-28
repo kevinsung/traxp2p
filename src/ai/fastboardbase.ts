@@ -4,6 +4,21 @@ import { LINE_SPAN } from '../game/wins'
 import type { Board, Dir, GameState } from '../game/types'
 
 /**
+ * FROZEN BASELINE — do not edit, do not import from the app.
+ *
+ * A byte-for-byte copy of src/ai/fastboard.ts as of commit 14da60e: the last build
+ * before the 2026-07-27 search-efficiency work. Kept as the arena's `base`
+ * agent and, more importantly, as the arm every number in that promotion-log
+ * entry was measured against — `vs-analyst --agents base,current` plays the old
+ * build and the new one over *identical* game seeds in one process, so both see
+ * the same analyst stream and the same machine load and the per-game results
+ * pair exactly. Without this file those measurements are not reproducible.
+ *
+ * Dead code as far as the app bundle is concerned: src/ai/worker.ts imports
+ * only ./search2, so nothing here is shipped.
+ */
+
+/**
  * Mutable, integer-encoded search board with make/unmake. The immutable
  * engine (src/game/engine.ts) stays the reference oracle for correctness —
  * this class exists purely so search can expand nodes without copying the
@@ -11,21 +26,13 @@ import type { Board, Dir, GameState } from '../game/types'
  * tests (tests/fastboard.test.ts) hold it to the engine's exact behavior.
  */
 
-// --- Coordinates: 10-bit x/y fields packed into one non-negative int -------
+// --- Coordinates: 12-bit x/y fields packed into one non-negative int -------
 
-/**
- * 10 bits per axis, so a cell index fits in 2²⁰ and can therefore *address a
- * flat array* — which is the entire reason for the narrow field: it is what
- * lets the track walks below replace their per-call `Set<number>` with a stamp
- * array. The range costs nothing in practice: the arena's ply cap is 300, so no
- * coordinate can reach ±300 even in a pathological game, and make() still
- * throws rather than silently wrapping.
- */
-export const SHIFT = 10
-const MASK = 0x3ff
-const CENTER = 512
-/** make() throws beyond this rather than silently wrapping the 10-bit field. */
-const COORD_LIMIT = 511
+export const SHIFT = 12
+const MASK = 0xfff
+const CENTER = 2048
+/** make() throws beyond this rather than silently wrapping the 12-bit field. */
+const COORD_LIMIT = 2047
 
 export const cellOf = (x: number, y: number): number => ((x + CENTER) << SHIFT) | (y + CENTER)
 export const cellX = (cell: number): number => (cell >>> SHIFT) - CENTER
@@ -73,42 +80,6 @@ function mixCell(x: number, y: number, tileIndex: number, c1: number, c2: number
 const SALT1 = [0x9e3779b9, 0x7f4a7c15]
 const SALT2 = [~0x9e3779b9 >>> 0, ~0x7f4a7c15 >>> 0]
 
-// --- Visited stamps ---------------------------------------------------------
-
-/** Cell indices are 10 bits per axis, so this is the whole cell space. */
-export const CELL_SPACE = 1 << 20
-
-/**
- * Generation-stamped replacements for the `Set<number>` the track walks used to
- * allocate and clear on every call. `has` becomes an array read compared
- * against the current generation, `add` a write, and `clear` an increment — no
- * allocation, no hashing. Between them `detectWins`, `walk` and `moves` run on
- * every single make(), so this is most of what a make/unmake pair was spending.
- *
- * Each consumer gets its **own lane**. `moves()` used to alias `detectWins`'
- * set, which was safe only because every caller happened to drain the move list
- * before the first make(); with a shared generation counter, a nested make()
- * would bump the generation out from under an in-progress `moves()` and it
- * would start re-emitting cells it had already seen.
- *
- * An index past the end is inert rather than unsafe — a typed-array read out of
- * range is `undefined` (never equal to a generation) and a write is dropped —
- * so the fringe cells one step beyond a ±511 coordinate cost at worst a
- * duplicated move, in a position make() refuses to create in the first place.
- */
-const winStamp = new Uint32Array(CELL_SPACE * 2) // cell*2 + color
-let winGen = 0
-const moveStamp = new Uint32Array(CELL_SPACE) // cell
-let moveGen = 0
-
-/** Advance a lane's generation, wiping on the (2³²-clears-away) wrap. */
-export function nextGen(stamp: Uint32Array, gen: number): number {
-  const next = (gen + 1) >>> 0
-  if (next !== 0) return next
-  stamp.fill(0)
-  return 1
-}
-
 // --- Undo frames ------------------------------------------------------------
 
 interface Frame {
@@ -138,8 +109,9 @@ export class FastBoard {
   minY = Infinity
   maxY = -Infinity
   private readonly stack: Frame[] = []
-  // Scratch buffer reused across calls (make never nests within itself).
+  // Scratch buffers reused across calls (make never nests within itself).
   private readonly cascadeQueue: number[] = []
+  private readonly winVisited = new Set<number>()
 
   static fromState(state: GameState): FastBoard {
     const fb = new FastBoard()
@@ -267,46 +239,31 @@ export class FastBoard {
    * Candidates are empty neighbors of occupied cells whose known edges all
    * match — a pre-filter only: make() stays the authoritative legality check
    * (the cascade can still reject).
-   *
-   * With `constraints`, also fills a parallel array with each move's number of
-   * occupied neighbours (0-4) — how *forcing* the placement is. This loop
-   * already computes exactly that to build the edge masks, so handing it back
-   * is free, and it is the only domain knowledge the search's move ordering
-   * has: see `scoreMoves` in search2.ts.
    */
-  moves(out: number[], constraints?: number[]): number {
+  moves(out: number[]): number {
     out.length = 0
-    if (constraints) constraints.length = 0
     if (this.tiles.size === 0) {
       const origin = cellOf(0, 0)
-      for (const t of FIRST_TILE_IDX) {
-        out.push(origin * 8 + t)
-        constraints?.push(0)
-      }
+      for (const t of FIRST_TILE_IDX) out.push(origin * 8 + t)
       return out.length
     }
-    // Own stamp lane, deliberately not detectWins': see the note there.
-    moveGen = nextGen(moveStamp, moveGen)
+    const seen = this.winVisited // reuse as a scratch Set; cleared below
+    seen.clear()
     for (const cell of this.tiles.keys()) {
       for (let d = 0; d < 4; d++) {
         const n = cell + DELTA[d]
-        if (this.tiles.has(n) || moveStamp[n] === moveGen) continue
-        moveStamp[n] = moveGen
+        if (this.tiles.has(n) || seen.has(n)) continue
+        seen.add(n)
         let wMask = 0
         let rMask = 0
-        let occupied = 0
         for (let dd = 0; dd < 4; dd++) {
           const nt = this.tiles.get(n + DELTA[dd])
           if (nt === undefined) continue
-          occupied++
           if ((TILE_CODE[nt] >>> ((dd + 2) & 3)) & 1) rMask |= 1 << dd
           else wMask |= 1 << dd
         }
         for (let t = 0; t < 6; t++) {
-          if ((TILE_CODE[t] & wMask) === 0 && (TILE_CODE[t] & rMask) === rMask) {
-            out.push(n * 8 + t)
-            constraints?.push(occupied)
-          }
+          if ((TILE_CODE[t] & wMask) === 0 && (TILE_CODE[t] & rMask) === rMask) out.push(n * 8 + t)
         }
       }
     }
@@ -339,7 +296,7 @@ export class FastBoard {
   }
 
   private remove(packed: number): void {
-    const cell = packed >>> 3
+    const cell = Math.floor(packed / 8)
     this.tiles.delete(cell)
     this.hashXor(cell, packed & 7)
   }
@@ -366,14 +323,15 @@ export class FastBoard {
    * forced). Returns a bitmask: bit 0 = White won, bit 1 = Red won.
    */
   private detectWins(placed: number[]): number {
-    winGen = nextGen(winStamp, winGen)
+    const visited = this.winVisited
+    visited.clear()
     const width = this.maxX - this.minX + 1
     const height = this.maxY - this.minY + 1
     let mask = 0
     for (const p of placed) {
-      const cell = p >>> 3
+      const cell = Math.floor(p / 8)
       for (let color = 0; color < 2; color++) {
-        if (winStamp[cell * 2 + color] === winGen) continue
+        if (visited.has(cell * 2 + color)) continue
         const code = TILE_CODE[this.tiles.get(cell)!]
         let d1 = -1
         let d2 = -1
@@ -383,16 +341,16 @@ export class FastBoard {
             else d2 = d
           }
         }
-        winStamp[cell * 2 + color] = winGen
-        const endA = this.walk(cell, d1, color)
+        visited.add(cell * 2 + color)
+        const endA = this.walk(cell, d1, color, visited)
         if (endA === -1) {
           mask |= 1 << color // loop
           continue
         }
-        const endB = this.walk(cell, d2, color) // a simple path cannot loop one-sided
-        const aCell = endA >>> 2
+        const endB = this.walk(cell, d2, color, visited) // a simple path cannot loop one-sided
+        const aCell = Math.floor(endA / 4)
         const aDir = endA & 3
-        const bCell = endB >>> 2
+        const bCell = Math.floor(endB / 4)
         const bDir = endB & 3
         const horizontal =
           (aDir === 3 && cellX(aCell) === this.minX && bDir === 1 && cellX(bCell) === this.maxX) ||
@@ -411,7 +369,7 @@ export class FastBoard {
    * visited cells. Returns -1 for a loop, else the open end packed as
    * cell*4 + exitDir.
    */
-  private walk(startCell: number, d: number, color: number): number {
+  private walk(startCell: number, d: number, color: number, visited: Set<number>): number {
     let cur = startCell
     for (;;) {
       const n = cur + DELTA[d]
@@ -419,7 +377,7 @@ export class FastBoard {
       if (nt === undefined) return cur * 4 + d
       // Re-entering the start tile closes the loop (see wins.ts trace).
       if (n === startCell) return -1
-      winStamp[n * 2 + color] = winGen
+      visited.add(n * 2 + color)
       d = OTHER_END[nt * 4 + ((d + 2) & 3)]
       cur = n
     }

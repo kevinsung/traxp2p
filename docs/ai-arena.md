@@ -71,17 +71,76 @@ Pick a job count from cores, not from games: `--jobs auto` (cores − 1) is the 
 values above `--games` are clamped. On a 16-core box a 200-game match drops from ~20 minutes
 to a couple of minutes. Two things to keep in mind:
 
-1. **`--budget` is wall-clock, so it does not survive parallelism.** With J games running at
-   once, each process may search far less per move than it would alone — and how much less
-   depends on the machine's load. Time-budgeted results are therefore *not* comparable across
-   job counts or across machines. Use `--nodes` for load-independent, apples-to-apples
-   strength comparisons; keep `--budget` for answering "how strong is it at 1.5 s of real
-   think time", and run that one at `--jobs 1`.
+1. **`--budget` is wall-clock, so it does not survive parallelism** — at least not across
+   *different* job counts. With J games running at once each process may search less per move
+   than it would alone, by an amount that depends on the machine's load, so a budgeted score
+   is meaningless on its own and never comparable across job counts or machines.
+
+   It is still comparable *within* one setting, which matters because a 1000-game budgeted
+   gate at `--jobs 1` takes about five hours here and under an hour at `--jobs 8`. So: a
+   budgeted comparison may run at `--jobs J` provided all three hold —
+
+   - **J is well under the core count** (leave the box room; oversubscription is what makes
+     per-move think time collapse unpredictably),
+   - **the box is otherwise idle** for the whole comparison, and
+   - **J is identical for both arms**, and recorded beside the score.
+
+   Then apply the confound check below: re-run the *old* build under the new settings and
+   confirm its number reproduces. If it does not, the delta is measuring the settings, not
+   the build. Use `--nodes` when you want a result that needs none of this care.
 2. **The transposition table is per process.** The seed and color assignment of each game
    index are identical at any `--jobs`, but *which* games share a TT changes, so individual
    games can end differently at `--jobs 1` and `--jobs 8` for search agents. Aggregate scores
    are unaffected in expectation; a bit-identical rerun needs the same `--jobs`. (Agents with
    no state — `random` — are bit-identical at any job count.)
+
+## Benchmarking against trax-analyst
+
+Self-play is a poor instrument for tactical and eval work: a symmetric gain largely cancels
+when both sides have it. The `closesInOne` change was **level in self-play (51.8%)** and worth
+**+3.4pt** against a fixed external opponent. So the real gate is `scripts/vs-analyst.ts`,
+which plays us against `@slugbugblue/trax-analyst`:
+
+```bash
+npm run vs-analyst -- [--agent NAME | --agents A,B] [--games N] [--seed N | --seeds 1,2,3]
+                      [--ply N] [--budget MS] [--nodes N] [--margin N] [--jobs N]
+                      [--analyst pick|best] [--diag] [--out FILE]
+```
+
+It shards like the arena and shares its seeding (`gameSeeds` by global index), so a shard
+plays exactly the games it would have in a sequential run. Points to know:
+
+- **The analyst is a 1-ply engine that picks at random within 5 points of best.** Benchmark it
+  as `suggest().pick`, which is what this does, with `Math.random` swapped for a seeded stream
+  on its own salt. `--analyst best` (strict `.all[0]`) exists only to reproduce old numbers.
+- **Every ply is bridge-checked** against `@slugbugblue/trax`'s own position. The `/` vs `\`
+  notation bug (commit 9a84b19) is what this guards against: a silently divergent bridge
+  invalidates every number in the run, so a mismatch aborts it.
+- **`--nodes` lifts the time budget** unless `--budget` is also given. The shipped budget is
+  1500 ms and this search runs on the order of 10k nodes/s, so a 20000-node cap binds only
+  about half the time and the clock cuts the rest — which would hand a *faster* build more
+  nodes than the baseline at nominally equal work. Pass `--nodes N --budget 1500` to reproduce
+  a historical number measured before this rule existed.
+- **`--jobs auto` is rejected.** Against a fixed opponent the job count changes the score by
+  ~3pt (see below), so it must be pinned and recorded.
+- **`--seeds 1,2` pools raw counts** across seeds into one CI, which is the pooling the "how
+  many games" section asks for and is easy to get wrong by averaging percentages.
+- **`--agents a,b`** plays both builds over identical game seeds, interleaved inside each
+  shard, and reports the paired difference. Caveat: both arms then live in one process holding
+  separate module-level transposition tables, so each *absolute* score sits below a solo run —
+  the comparison stays fair because the handicap is equal for both.
+
+Two numbers it reports that the arena cannot:
+
+- **nps, nodes/move and a completed-depth histogram**, from the `SearchResult` every move
+  already returns. This is what tells a speed win from a strength win — and search speed
+  converts directly into depth, and therefore strength, at a time budget.
+- **`--diag`: a loss taxonomy.** For each loss it finds the first ply where *every* one of our
+  legal moves handed the analyst a win-in-1, and how many winning replies it had there
+  (`forkWidth`). `forkWidth == 1` is a single unstoppable threat: a position we should never
+  have entered, which more search depth can avoid. `>= 2` is a genuine fork, which one more
+  ply cannot fix and which needs better threat detection. Which bucket dominates is what
+  decides where the next round of work should go.
 
 ## Adding and testing a new AI
 
@@ -103,9 +162,10 @@ to a couple of minutes. Two things to keep in mind:
    `--nodes` keeps the comparison fair while all cores are busy, and `--jobs auto` is what
    makes 200 games cheap enough to actually run — don't settle for 40 games here.
 5. **Control for think time.** The head-to-head above compares quality at equal *work*. To
-   also check speed, re-run at equal wall-clock — `--budget 1500`, `--jobs 1` — since a
-   time budget means nothing when processes are competing for cores. If v2 only wins on the
-   budgeted run, that's a speed result, not a strength one.
+   also check speed, re-run at equal wall-clock — `--budget 1500` at a small, pinned
+   `--jobs` (see the rules above) — since a time budget means nothing when processes are
+   competing for cores. If v2 only wins on the budgeted run, that's a speed result, not a
+   strength one.
 6. **Confirm robustness.** Re-run with 1–2 other `--seed` values and a larger `--games` to
    make sure the edge holds and isn't seed noise. Only promote once it does.
 
@@ -147,6 +207,15 @@ agnostic to which search runs underneath. To make `v2` the app's opponent:
 2. **Keep a regression baseline.** Leave `current` in the arena registry pointing at the old
    module (or rename it, e.g. `v1`), so you can re-run the head-to-head at any time to guard
    against future regressions.
+
+   When the change is an edit to `search2.ts` in place rather than a new module, freeze a copy
+   first — `src/ai/search2base.ts` and `src/ai/fastboardbase.ts` are the frozen build from
+   before the 2026-07-27 search work, registered as `base` in both CLIs. That is what makes
+   `--agents base,current` possible, and a **paired** run is worth a lot: both arms play the
+   same game seeds against the same analyst stream under the same load, so the per-game
+   results pair and the difference has far less variance than two separate runs. It is also
+   the only way the numbers in a promotion-log entry stay reproducible after the fact. The
+   baseline modules are dead code for the app bundle (`worker.ts` imports only `./search2`).
 3. **Verify end-to-end**: `npm run build` (type-check + production build), `npm test`, and
    the `verify` skill (headless browser) to confirm a full AI game still plays correctly in
    the app.
@@ -212,3 +281,110 @@ whatever the app actually ships.
 
   Residual losses are now dominated by a *single* unstoppable threat (117 of 180), not double
   threats, so one more ply of vision will not touch them.
+
+- **2026-07-27 — search efficiency**: four changes to `src/ai/search2.ts` and
+  `src/ai/fastboard.ts`, no change to the evaluation. The previous entry concluded the eval
+  well had run dry and the residue was a *search* problem; this is that round.
+
+  **Result, against `trax-analyst` at the shipped `--budget 1500`: 86.0% → 92.8%, i.e.
+  +6.90pt (95% CI 4.97–8.83)** over 2000 identical games × 2 seeds, `--jobs 16`, played
+  paired (`--agents base,current`) so both arms saw the same seeds, the same analyst stream
+  and the same machine load. Losses fell 281 → 143. At *equal work* (`--nodes 20000`,
+  2000 games × 2 seeds, `--jobs 30`) it is 91.0% → 93.6%, **+2.65pt (CI 1.01–4.29)**. So
+  roughly 2.6pt of the gain is better search per node and the other ~4.3pt is speed
+  converting into depth. In self-play at equal work it is **58.3%** over 300 games (CI
+  52.8–63.9) — unlike the eval work in the entry above, this kind of change does *not*
+  cancel in self-play.
+
+  What changed, in descending order of measured value:
+
+  1. **~2.2× node rate**, from two batches of mechanical work. Hygiene: `bump()` moved above
+     the TT probe (the probe's early returns were the one path through `negamax` that never
+     touched the clock, so a cutoff-heavy subtree could run past the deadline), `>>>3`/`>>>2`
+     for the packed-value divisions, lazy selection instead of an O(n²) insertion sort over
+     ~76 moves, the eval cache from a `Map` to open-addressed typed arrays, and history from
+     a `Map` to an `Int32Array` with a **separate lane per side to move** — a move's identity
+     is side-independent in Trax but its value is not, and the two sides had been overwriting
+     each other's credit. Then: cells re-encoded to **10 bits per axis** so a cell index fits
+     in 2²⁰ and *can address a flat array*, which let every per-call `Set<number>` in
+     `detectWins`/`walk`/`walkEval`/`moves` become a generation-stamped `Uint32Array`.
+     Measured on 38 fixed positions from real analyst games, one process, both builds
+     interleaved: **4.5k → 9.9k nodes/s**. In-match at `--budget 1500`: 8.8k → 19.3k nodes/s,
+     11.1k → 23.4k nodes/move.
+  2. **Partial-iteration retention.** `chooseMove` used to discard an aborted deepening
+     iteration wholesale, which at 1500 ms and depth 5–6 routinely threw away half the think
+     time — including root moves fully searched a ply deeper than anything it kept. It now
+     keeps the completed prefix when ≥2 root moves settled. Sound because `rootMoves` is
+     re-sorted best-first after every iteration, so the previous best is element 0 and always
+     inside the prefix; "best of the prefix at depth d" therefore cannot be worse than "the
+     previous choice re-judged at depth d". The decided-break deliberately does not run on
+     partial scores (outside the first entry they are fail-soft upper bounds), and the
+     reported `depth` still counts only *fully* completed iterations so the histogram stays
+     honest. Gated on its own, paired against a throwaway snapshot holding the speed work
+     alone (`--budget 1500`, 2000 games × 2 seeds, `--jobs 16`): **90.8% → 92.7%, +1.90pt
+     (CI 0.22–3.58)**, at an identical node rate (19.5k vs 20.0k nodes/s) — so it is a
+     search-quality gain, not a speed one, and it accounts for most of the +2.65pt equal-work
+     delta. (Freezing a snapshot per stage is what makes this kind of attribution possible;
+     only the pre-change `base` was worth keeping afterwards.)
+  3. **TT mate scores stored as distance-from-node** rather than distance-from-root. Worth
+     being precise about the severity: because Trax legality is history-free, "won for the
+     side to move" is a property of the position alone, so the *verdict* was never corrupted —
+     only the preference among wins and when the decided-break fires, i.e. dithering in an
+     already-won position. Six lines; bundled, never gated alone.
+  4. **Move ordering gets one piece of domain knowledge**: the number of occupied neighbours
+     of the placement, which `FastBoard.moves` already computes to build its edge masks, so
+     it is free. Weighted at 0.2 per neighbour — deliberately below the smallest history bump
+     — it is a pure tie-break across the long tail of zero-history moves, which is exactly
+     where ordering degenerates (every node on the frontier of a fresh iteration). Worth
+     **3.2% fewer nodes** to complete depth 5. Small, but free and in the right direction.
+
+  Tried and **rejected**, with the measurements:
+
+  - **PVS at interior nodes.** Implemented with a float-safe null window (`alpha + 1e-9`, not
+    `alpha + 1`: `loopThreat`'s 100/dist² produces differences far below 1, and an
+    integer-width window silently reclassifies a genuine improvement as a fail-low). It cost
+    **2.0% *more* nodes** to complete depth 5 and was flat on wall clock. With ordering this
+    weak it pays more in re-searches than it saves, so it was dropped on the mechanism
+    measurement rather than burning a 4000-game gate on it.
+  - **Letting the neighbour-count prior compete with history.** Nodes to depth 5 relative to
+    no prior: weight 0.2 → 0.968, 5 → 0.968, **100 → 1.035, 10 000 → 1.077**. History is
+    learned from the search actually running; a static prior that outranks it makes ordering
+    worse. Keep it a tie-break.
+  - **Threat-proximity ordering** (the plan's "signal 2", exit cells being where 79% of real
+    winning moves land) was **not attempted**: exit cells only exist inside `evalWhite`, which
+    runs at *leaves*, and the interior nodes that need ordering are never evaluated at all —
+    there is no cached parent eval to reuse. It becomes affordable only with maintained track
+    endpoints; see the decision note below.
+
+  **Where the losses now are** (`--diag`, at `--budget 1500`, 2000 games × 2 seeds):
+
+  | bucket | base | now |
+  |---|---|---|
+  | losses | 281 | 143 |
+  | `forkWidth == 1` — one unstoppable threat, needs depth | 158 | 69 |
+  | `forkWidth >= 2` — a genuine fork, needs threat detection | 115 | 71 |
+
+  This **overturns the previous entry's conclusion**. Depth halved the single-threat bucket
+  (158 → 69) but barely touched forks (115 → 71), so the residue is now split roughly evenly
+  rather than dominated by single threats. The previous entry's "one more ply of vision will
+  not touch them" was measured before this speed-up and no longer describes the position.
+  Symmetric threat detection — scoring the *non-mover's* verified threat, in the cheap form
+  that counts distinct closing cells, since ≥2 distinct cells cannot be blocked by one
+  placement — is therefore back on the table, and is the one lever aimed at the bucket that
+  did not move. (It was rejected once before at −10pt, but on the *imprecise geometric* flag,
+  in self-play, at 200 games — none of which is evidence about the verified form.)
+
+  **Cost to be aware of:** the stamp lanes are three always-resident typed arrays over the
+  2²⁰ cell space — ~20 MB, on top of the TT's 24 MB, in the browser worker. (The eval cache
+  moving off a 250k-entry `Map` gives some of that back.) Halving them to `Uint16Array` with a
+  wipe every 65 535 generations would be behaviour-identical and cost ~0.3 ms per wipe, i.e.
+  nothing; it was left out of this round only because memory was not in its scope.
+
+  Also worth recording: **`--nodes` runs were never actually node-capped.** The shipped
+  budget is 1500 ms and this search ran ~10k nodes/s, so a 20000-node cap bound only about
+  half the moves and the clock cut the rest. That is harmless while comparing two builds of
+  the same speed, and *fatal* to a comparison where one side is 2.2× faster — it would have
+  handed the new build more nodes at nominally equal work. `scripts/vs-analyst.ts` now lifts
+  the budget for a bare `--nodes` run. The shipped build measured 82.3% in the entry above but
+  **85.3%** here under the historical `--nodes 20000 --budget 1500` config at `--jobs 30`; the
+  3pt is the documented `--jobs` confound, not a change in the build.

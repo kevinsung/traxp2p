@@ -23,6 +23,7 @@ import { randomAgent, searchAgent, type Agent } from '../src/ai/agent'
 import { mergeTallies, playGames, summarize, type MatchTally } from '../src/ai/arena'
 import { AI_LIMITS, chooseMove as chooseMoveV1, type SearchLimits } from '../src/ai/search'
 import { chooseMove as chooseMoveV2 } from '../src/ai/search2'
+import { chooseMove as chooseMoveBase } from '../src/ai/search2base'
 
 const SCRIPT = fileURLToPath(import.meta.url)
 const TSX_BIN = fileURLToPath(new URL('../node_modules/.bin/tsx', import.meta.url))
@@ -46,6 +47,10 @@ function buildRegistry(limits: SearchLimits): Record<string, Agent> {
     // --nodes 20000 (3 seeds, CI 51.5-54.6) and 54.1% over 1300 games at
     // --budget 1500 (2 seeds, CI 51.4-56.8) against the pre-term build.
     current: searchAgent('current', chooseMoveV2, limits),
+    // Frozen copy of the shipped search + board as of commit 14da60e (see
+    // src/ai/search2base.ts); the regression baseline while search work is in
+    // flight, and the arm `scripts/vs-analyst.ts --agents base,current` pairs against.
+    base: searchAgent('base', chooseMoveBase, limits),
     v1: searchAgent('v1', chooseMoveV1, limits),
     random: randomAgent('random'),
   }

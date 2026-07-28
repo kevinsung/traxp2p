@@ -10,7 +10,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
-    "arena": "tsx scripts/arena.ts"
+    "arena": "tsx scripts/arena.ts",
+    "vs-analyst": "tsx scripts/vs-analyst.ts"
   },
   "dependencies": {
     "react": "^19.2.7",
