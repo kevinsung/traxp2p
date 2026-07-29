@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "arena": "tsx scripts/arena.ts",
-    "vs-analyst": "tsx scripts/vs-analyst.ts"
+    "vs-analyst": "tsx scripts/vs-analyst.ts",
+    "bench": "tsx scripts/bench.ts"
   },
   "dependencies": {
     "react": "^19.2.7",

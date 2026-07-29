@@ -142,6 +142,73 @@ Two numbers it reports that the arena cannot:
   ply cannot fix and which needs better threat detection. Which bucket dominates is what
   decides where the next round of work should go.
 
+### Deciding a match early: `--sprt`
+
+A budgeted 2000-game gate runs over an hour, and most of them are settled long before
+the end. `--sprt` runs a sequential probability ratio test on the paired difference and
+stops the match as soon as it crosses a bound:
+
+```bash
+npm run vs-analyst -- --agents current,pre1 --games 1000 --seeds 1,2 --budget 1500 \
+                      --jobs 16 --diag --sprt [--sprt-delta 0.02]
+```
+
+- **It needs `--agents A,B`.** The test is defined on the paired per-game difference —
+  the quantity the `pairHist` histogram already carries — and H1 is "A is better by
+  `--sprt-delta`" (default 0.02, i.e. +2pt).
+- **α = β = 0.05**, so the bounds are ±2.94 on the log-likelihood ratio. The statistic is
+  the normal-approximation GSPRT for a mean shift, `n·δ·(x̄ − δ/2)/σ̂²`, using the
+  *observed* variance — which is what makes it valid for a paired difference, whose
+  variance is far below either arm's alone.
+- **It will not fire below 50 pairs.** Early on the differences are mostly zero, the
+  sample variance is 0, and the LLR is ±infinity; without the floor this decided a match
+  after 9 games.
+- **The result is reproducible in its decision, not in its game count.** With `--jobs > 1`
+  the pairs finished when the bound is crossed are not a prefix of the match, so a rerun
+  stops somewhere else. Record `--jobs` beside it, as always.
+- Shards learn about the decision through a temp file they stat between games, not over
+  IPC: `playRange` is one long synchronous loop, so a child's event loop never runs and an
+  IPC message would not be delivered until the shard had already finished.
+
+An `--sprt` run still prints the full report, so `--diag` and `--out` work alongside it.
+
+## Measuring mechanism, not strength: `npm run bench`
+
+The arena and vs-analyst answer "is this stronger". `scripts/bench.ts` answers "is this
+faster, and what does a ply cost" — the two mechanism numbers that decide whether a change
+deserves a 4000-game gate at all.
+
+```bash
+npm run bench -- [--agents A,B] [--budget MS | --nodes N]   # node rate
+npm run bench -- --depths 3,4,5,6 [--agents A,B]            # nodes to complete each depth
+npm run bench -- --from losses.json [--count 38] [--ply 20] # regenerate the fixture
+```
+
+It runs over `scripts/bench-positions.json`: 38 positions taken at a fixed ply from games
+lost to the analyst (a `--diag --out` dump, which is where the tactical motifs are dense).
+Committing the fixture is the point — a number from today stays comparable with one from
+months ago even after the analyst dependency moves.
+
+Three things to know before quoting a number from it:
+
+- **Measure nodes-to-complete-depth directly; never read a branching factor off the depth
+  histogram.** `chooseMove` reports the last *fully completed* iteration and, since
+  partial-iteration retention, keeps work from an aborted deeper one — so the histogram
+  understates what the search looked at, and mean-depth-at-a-node-cap gives an effective
+  branching factor around 27 where the truth is under 7. `--depths` lifts the clock and the
+  node cap and fixes `maxDepth`, which is the only honest way to ask.
+- **The transposition table persists across positions and across rows.** Depth 5 measured
+  alone is not the depth 5 of a `3,4,5` run (~570k vs ~470k nodes here). That is the
+  condition the shipped search runs in, so it is not a bug — but only rows within one
+  invocation, and arms within one row, are comparable.
+- **Absolute node counts do not survive regenerating the fixture**, only ratios do.
+
+Measured 2026-07-29 on the current fixture: depth 3 → 4 costs ×10.9 and 4 → 5 costs ×3.1,
+for a geometric-mean **effective branching factor of 5.8**. The odd/even oscillation is
+normal alpha-beta behaviour and the geometric mean is the number to quote. It is *below*
+the √76 ≈ 8.7 that perfect ordering buys a plain minimax, which is why ordering heuristics
+keep returning nothing here and why the eval, not the search, is where the remaining work is.
+
 ## Adding and testing a new AI
 
 1. **Create the variant.** Copy the piece you want to change into a new module — e.g.
@@ -380,6 +447,10 @@ whatever the app actually ships.
   wipe every 65 535 generations would be behaviour-identical and cost ~0.3 ms per wipe, i.e.
   nothing; it was left out of this round only because memory was not in its scope.
 
+  **Update 2026-07-29: the fork bucket is not blind, and this recommendation was wrong.**
+  See the entry below — symmetric verified threat detection was built, measured and
+  rejected. Do not spend another round on it without reading that entry first.
+
   Also worth recording: **`--nodes` runs were never actually node-capped.** The shipped
   budget is 1500 ms and this search ran ~10k nodes/s, so a 20000-node cap bound only about
   half the moves and the clock cut the rest. That is harmless while comparing two builds of
@@ -388,3 +459,86 @@ whatever the app actually ships.
   the budget for a bare `--nodes` run. The shipped build measured 82.3% in the entry above but
   **85.3%** here under the historical `--nodes 20000 --budget 1500` config at `--jobs 30`; the
   3pt is the documented `--jobs` confound, not a change in the build.
+
+- **2026-07-29 — symmetric verified threat detection: built, measured, REJECTED.** Nothing
+  in `src/ai/` changed as a result except the stamp lanes below. Recorded at length because
+  the previous entry recommended this as the next round's work, and the reasoning behind that
+  recommendation turns out to be wrong in a way worth not rediscovering.
+
+  **The idea.** `closesInOne` verification runs only for the side to move (the
+  `color === fb.turn` guard in `evalWhite`); the opponent's threats are left to the
+  22%-precision geometric flag. The proposal was to have the verifier return the *count of
+  distinct closing cells* and run it for both sides, since two distinct cells cannot both be
+  blocked by one placement. Aimed at the `forkWidth >= 2` losses, the bucket depth does not
+  touch.
+
+  **The proposed predicate does not work, and the reason is structural.** A converged loop
+  threat has its two open ends one step apart, so it closes at *either* end — nearly every
+  verified threat already has two distinct closing cells. Measured over 5545 positions from
+  games lost to the analyst, against the ground truth "every legal move of the mover leaves
+  the opponent a win-in-1":
+
+  | predicate | fires | precision | recall |
+  |---|---|---|---|
+  | has any closing cell | 1445 | 11.6% | 90.8% |
+  | **two distinct closing cells** (the proposal) | **1444** | **11.6%** | **90.8%** |
+  | two closing cells >= 2 apart | 199 | 39.7% | 42.7% |
+  | two closing cells **>= 3 apart** | 70 | **94.3%** | 35.7% |
+  | two closing cells >= 6 apart | 40 | 95.0% | 20.5% |
+
+  Counting closing cells is a slightly noisier copy of "has a threat" — 1444 fires against
+  1445 — and at 11.6% it is *less* precise than the geometric flag it was meant to sharpen.
+  **The separation is the entire signal**, and its threshold is derivable rather than tuned:
+  a placement removes a closing cell by occupying it or by fixing an edge on a cell next to
+  it, so one placement can answer both only when they are within 2. The measured cliff sits
+  exactly there.
+
+  **Even at 94% precision it is worth nothing.** Two paired 1700+ game gates at
+  `--budget 1500`, `--jobs 16`, against a snapshot of the shipped build:
+
+  | | paired delta | losses | `forkWidth == 1` | `forkWidth >= 2` | nps |
+  |---|---|---|---|---|---|
+  | unguarded fork pass | **−0.61pt** (CI −2.67–1.45) | 105 v 97 | 61 v 46 | 43 v 49 | 16.0k v 19.6k |
+  | guarded by `threats >= 2` | **+0.12pt** (CI −1.56–1.79) | 113 v 115 | 56 v 63 | 55 v 50 | 18.0k v 19.7k |
+
+  The first run cost 18% of the node rate; the fork bucket improved by 6 and the *other*
+  bucket got 15 worse, because the lost depth costs more than the new vision buys. Gating the
+  pass on the geometric two-threat count fixed the cost (the opponent has one flagged track
+  in 28.1% of positions but two in only 2.4%, and gating loses no true forks at all — same 66
+  hits, marginally better precision) and the result went to dead level. The fork bucket moved
+  −6 then +5 across the two gates: noise.
+
+  **Why level is the right answer, in hindsight.** The `loopDouble` cliff already scores
+  exactly the positions the verified predicate fires on — a side holding two flagged threats
+  — at ±10 000. Promoting those to ±400 000 when verification confirms them is a *magnitude*
+  change on a signal the eval already had, and this log already records that magnitude
+  changes buy nothing here (50 000 and 500 000 for `loopDouble`, no consistent gain). The
+  search was already avoiding those positions. The 64% of real forks the predicate misses are
+  the ones that would have mattered, and reaching them needs a better candidate generator,
+  not a better test on the current one.
+
+  So the previous entry's "the fork bucket needs better threat detection" was too quick: the
+  bucket is not *blind*, it is already penalised. Whatever is causing those losses is
+  upstream of the eval's verdict on the final position.
+
+  **Kept from the round**, since all three are wins on their own terms:
+
+  1. **`npm run bench`** (`scripts/bench.ts` + a committed 38-position fixture) — node rate
+     and nodes-to-complete-depth on frozen positions. See its section above. Current
+     effective branching factor: **5.8**.
+  2. **`--sprt`** in `scripts/vs-analyst.ts`. Both gates above stopped themselves at ~85% of
+     the requested games. Two bugs worth knowing, both fixed: shards cannot be told to stop
+     over IPC (their game loop is synchronous, so the event never gets delivered — they stat
+     a temp file instead), and the test must not fire below ~50 pairs (early paired
+     differences are all zero, the sample variance is 0, and the LLR is ±infinity — this
+     decided a match after 9 games).
+  3. **Stamp lanes halved to `Uint16Array`** (`winStamp`, `moveStamp`, `evalStamp`): 20 MB →
+     10 MB always-resident in the browser worker. Behaviour-identical, but *only* because
+     `nextGen`'s wrap modulus moved to the array's own — at 32-bit width against 16-bit
+     storage a stamp from generation `g` starts aliasing generation `g + 65536`, which is
+     silently missed wins rather than merely redundant work. `tests/fastboard.test.ts` drives
+     the wrap directly, since a real search would need 65 535 generations to reach it.
+
+  Also tried and neutral: an edge pre-filter on the verifier's probe loop, skipping tiles
+  `make()` would reject anyway. Exactly node-identical (572 289 nodes to complete depth 5,
+  both builds) and worth ~0.7% wall clock. Not kept.

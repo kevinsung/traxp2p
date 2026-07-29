@@ -86,7 +86,7 @@ function axisPotential(span: number, openA: boolean, openB: boolean): number {
  * (see the note there) and deliberately separate from it, since `closesInOne`
  * calls make() — and therefore detectWins — from inside an eval.
  */
-const evalStamp = new Uint32Array(CELL_SPACE * 2) // cell*2 + color
+const evalStamp = new Uint16Array(CELL_SPACE * 2) // cell*2 + color
 let evalGen = 0
 
 /** Flagged tracks awaiting verification: [color, exitCellA, exitCellB] triples. */

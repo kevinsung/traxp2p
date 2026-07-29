@@ -9,7 +9,7 @@
  *   npm run vs-analyst -- [--agent NAME | --agents A,B] [--games N] [--seed N |
  *                          --seeds 1,2,3] [--ply N] [--budget MS] [--nodes N]
  *                          [--margin N] [--jobs N] [--analyst pick|best]
- *                          [--diag] [--out FILE]
+ *                          [--diag] [--sprt [--sprt-delta F]] [--out FILE]
  *
  * Shape mirrors scripts/arena.ts: the parent splits the game indices into
  * contiguous ranges, each range is played by a child `tsx` process running this
@@ -27,7 +27,9 @@
  *     search depth); `>= 2` is a fork (an eval/threat-detection problem).
  */
 import { spawn } from 'node:child_process'
-import { writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Trax } from '@slugbugblue/trax'
 import { suggest } from '@slugbugblue/trax-analyst'
@@ -215,6 +217,61 @@ interface ShardResult {
   pairHist: PairHist
 }
 
+/**
+ * Sequential probability ratio test on the paired difference, so a gate stops as
+ * soon as it is decided instead of always playing the full match. The budgeted
+ * gates run over an hour at 2000 games and usually settle long before the end.
+ *
+ * `pairHist` already carries everything this needs: the difference of two
+ * 3-valued scores takes only five values, so the histogram gives the exact mean
+ * and variance of the paired difference and merges by addition.
+ *
+ * H0 is "no difference", H1 is "A is `delta` better" (default +2pt, about the
+ * smallest effect the promotion log has ever cared about). The statistic is the
+ * usual normal-approximation GSPRT log-likelihood ratio for a mean shift,
+ * `n·δ·(x̄ − δ/2)/σ̂²`, against Wald's bounds at α = β = 0.05. Using the observed
+ * variance rather than a modelled one is what makes it valid for a *paired*
+ * difference, whose variance is far below that of either arm alone — that
+ * variance reduction is precisely why pairing is worth doing.
+ */
+const SPRT_ALPHA = 0.05
+const SPRT_BETA = 0.05
+const SPRT_LOWER = Math.log(SPRT_BETA / (1 - SPRT_ALPHA))
+const SPRT_UPPER = Math.log((1 - SPRT_BETA) / SPRT_ALPHA)
+/**
+ * Pairs required before the test may fire at all. The statistic divides by an
+ * *estimated* variance, and paired differences are mostly zero early on — a
+ * handful of identical pairs gives a sample variance of 0 and an LLR of
+ * ±infinity, which decided a match after 9 games in testing. A floor on n is the
+ * honest fix: the variance estimate has to be worth dividing by.
+ */
+const SPRT_MIN_PAIRS = 50
+
+interface SprtState {
+  n: number
+  mean: number
+  llr: number
+  decision: 'H1' | 'H0' | null
+}
+
+function sprt(hist: PairHist, delta: number): SprtState {
+  let n = 0
+  let sum = 0
+  let sumSq = 0
+  for (let i = 0; i < 5; i++) {
+    const d = (i - 2) / 2
+    n += hist[i]
+    sum += d * hist[i]
+    sumSq += d * d * hist[i]
+  }
+  if (n === 0) return { n, mean: 0, llr: 0, decision: null }
+  const mean = sum / n
+  const variance = sumSq / n - mean ** 2
+  if (n < SPRT_MIN_PAIRS || !(variance > 0)) return { n, mean, llr: 0, decision: null }
+  const llr = (n * delta * (mean - delta / 2)) / variance
+  return { n, mean, llr, decision: llr >= SPRT_UPPER ? 'H1' : llr <= SPRT_LOWER ? 'H0' : null }
+}
+
 function mergeInto(acc: ShardResult, s: ShardResult): void {
   for (const [name, t] of Object.entries(s.byAgent)) {
     const a = (acc.byAgent[name] ??= newTally())
@@ -297,7 +354,7 @@ interface Args {
 }
 
 /** Like scripts/arena.ts's parseArgs, plus valueless flags (`--diag`). */
-const VALUELESS = new Set(['diag'])
+const VALUELESS = new Set(['diag', 'sprt'])
 
 function parseArgs(argv: string[]): Args {
   const opts: Record<string, string> = {}
@@ -381,11 +438,17 @@ const seeds = (opts.seeds ?? opts.seed ?? '1').split(',').map(Number)
 const agentNames = (opts.agents ?? opts.agent ?? 'current').split(',')
 const analystMode = opts.analyst ?? 'pick'
 const wantDiag = flags.has('diag')
+const wantSprt = flags.has('sprt')
+/** H1's effect size, as a fraction of a point of score. Default +2pt. */
+const sprtDelta = Number(opts['sprt-delta'] ?? 0.02)
 
 if (!Number.isFinite(games) || games < 1) throw new Error('--games must be at least 1')
 if (seeds.some((s) => !Number.isFinite(s))) throw new Error(`bad --seeds: ${opts.seeds ?? opts.seed}`)
 if (analystMode !== 'pick' && analystMode !== 'best') throw new Error('--analyst must be pick|best')
 if (agentNames.length > 2) throw new Error('--agents takes at most two names')
+// The test is defined on the paired difference, which needs both arms.
+if (wantSprt && agentNames.length !== 2) throw new Error('--sprt needs --agents A,B: the test runs on the paired difference')
+if (wantSprt && (!Number.isFinite(sprtDelta) || sprtDelta <= 0)) throw new Error(`bad --sprt-delta: ${opts['sprt-delta']}`)
 for (const n of agentNames) {
   if (!CHOOSERS[n]) throw new Error(`unknown agent "${n}"; have: ${Object.keys(CHOOSERS).join(', ')}`)
 }
@@ -416,7 +479,7 @@ const ANALYST_SALT = 0x5bf03635
  * inside the same shard, so they see identical seeds, identical analyst streams
  * and identical machine load — the per-game differences pair exactly.
  */
-function playRange(start: number, count: number, onGame?: () => void): ShardResult {
+function playRange(start: number, count: number, onGame?: (r: ShardResult) => void, stopping?: () => boolean): ShardResult {
   const analyst = analystAgent(analystMode)
   const result: ShardResult = { byAgent: {}, pairHist: [0, 0, 0, 0, 0] }
   const arms = agentNames.map((name) => {
@@ -428,6 +491,10 @@ function playRange(start: number, count: number, onGame?: () => void): ShardResu
   for (const seed of seeds) {
     const perGameSeeds = gameSeeds(seed, games)
     for (let g = start; g < start + count; g++) {
+      // Under --sprt the parent may decide the match mid-run. Stopping between
+      // games rather than mid-game keeps every tally consistent and every arm's
+      // game count equal, so a partial shard merges exactly like a full one.
+      if (stopping?.()) return finish(result)
       // Even indices we move first, odd we move second — the same alternation
       // the arena uses, so first-move advantage cancels over the match.
       const ourColor: Color = g % 2 === 0 ? 'W' : 'R'
@@ -476,15 +543,19 @@ function playRange(start: number, count: number, onGame?: () => void): ShardResu
             transcript: encodeMoves(state.history),
           })
         }
-        onGame?.()
+        onGame?.(result)
       }
 
       if (scores.length === 2) result.pairHist[(scores[0] - scores[1]) * 2 + 2]++
     }
   }
 
-  if (wantDiag) for (const arm of arms) for (const l of arm.tally.lossList) diagnose(l)
-  return result
+  return finish(result)
+
+  function finish(r: ShardResult): ShardResult {
+    if (wantDiag) for (const arm of arms) for (const l of arm.tally.lossList) diagnose(l)
+    return r
+  }
 }
 
 // --- Shard mode: play our slice, hand the counts back on stdout ---------------
@@ -494,7 +565,18 @@ if (opts['shard-start'] !== undefined) {
   const count = Number(opts['shard-count'])
   if (!Number.isFinite(start) || !Number.isFinite(count)) throw new Error('bad --shard-start/--shard-count')
   let done = 0
-  const shard = playRange(start, count, () => process.send?.({ done: ++done }))
+  // The parent decides when a --sprt match is over, but it cannot tell us over
+  // IPC: playRange is one long synchronous loop, so the child's event loop never
+  // runs and a `message` would not be delivered until the shard had already
+  // finished. So the signal is a file the parent creates, checked with a stat
+  // between game pairs — microseconds against games that take about a second.
+  const stopFile = opts['stop-file']
+  const shard = playRange(
+    start,
+    count,
+    (r) => process.send?.({ done: ++done, pairHist: wantSprt ? r.pairHist : undefined }),
+    stopFile ? () => existsSync(stopFile) : undefined,
+  )
   console.log(JSON.stringify(shard))
   process.disconnect?.()
 } else {
@@ -513,37 +595,71 @@ if (opts['shard-start'] !== undefined) {
   const started = performance.now()
   const merged: ShardResult = { byAgent: {}, pairHist: [0, 0, 0, 0, 0] }
 
+  /** Set once the SPRT has decided, so the report can say the match stopped early. */
+  let stopped: SprtState | null = null
+  /**
+   * How the decision reaches the shards. Its *existence* is the signal, so it is
+   * created only on a crossing; the directory is unique per run so a crash never
+   * leaves a file that would cut a later match short.
+   */
+  const stopDir = wantSprt ? mkdtempSync(join(tmpdir(), 'vs-analyst-sprt-')) : null
+  const stopFile = stopDir ? join(stopDir, 'stop') : null
+
   if (jobs === 1) {
     const report = makeProgress(totalGames)
     let done = 0
     mergeInto(
       merged,
-      playRange(0, games, () => report(++done)),
+      playRange(
+        0,
+        games,
+        (r) => {
+          report(++done)
+          if (!wantSprt || stopped) return
+          const s = sprt(r.pairHist, sprtDelta)
+          if (s.decision) stopped = s
+        },
+        () => stopped !== null,
+      ),
     )
   } else {
     const report = makeProgress(totalGames)
     const perShard = new Map<number, number>()
+    const perShardHist = new Map<number, PairHist>()
     const childArgv = stripOpt(argv, 'jobs')
     const children: Array<ReturnType<typeof spawn>> = []
+    const stopArgs = wantSprt ? ['--stop-file', stopFile!] : []
     const shards = ranges.map(
       (range, i) =>
         new Promise<ShardResult>((resolve, reject) => {
           const label = `shard [${range.start}, ${range.start + range.count})`
           const child = spawn(
             TSX_BIN,
-            [SCRIPT, ...childArgv, '--shard-start', String(range.start), '--shard-count', String(range.count)],
+            [SCRIPT, ...childArgv, ...stopArgs, '--shard-start', String(range.start), '--shard-count', String(range.count)],
             { stdio: ['ignore', 'pipe', 'inherit', 'ipc'] },
           )
           children.push(child)
           let out = ''
           child.stdout?.on('data', (chunk) => (out += chunk))
           child.on('message', (msg) => {
-            const done = (msg as { done?: unknown }).done
+            const { done, pairHist } = msg as { done?: unknown; pairHist?: PairHist }
             if (typeof done !== 'number') return
             perShard.set(i, done)
             let total = 0
             for (const n of perShard.values()) total += n
             report(total)
+
+            if (!wantSprt || stopped) return
+            if (pairHist) perShardHist.set(i, pairHist)
+            // Every shard's latest snapshot, summed. Shards report at different
+            // rates, so this is a running total over whatever pairs are complete
+            // anywhere — see the note in the report below about what that costs.
+            const running: PairHist = [0, 0, 0, 0, 0]
+            for (const h of perShardHist.values()) for (let k = 0; k < 5; k++) running[k] += h[k]
+            const s = sprt(running, sprtDelta)
+            if (!s.decision) return
+            stopped = s
+            writeFileSync(stopFile!, `${s.decision}\n`)
           })
           child.on('error', reject)
           child.on('exit', (code, signal) => {
@@ -559,7 +675,12 @@ if (opts['shard-start'] !== undefined) {
             }
             const expect = range.count * seeds.length
             const got = parsed && Object.values(parsed.byAgent)[0]?.games
-            if (!parsed || got !== expect) {
+            // A short shard is normally a silently truncated match, which is
+            // exactly what this guard exists to prevent. It is legitimate only
+            // when *we* asked the shard to stop, so the exemption is tied to
+            // having sent the stop rather than to --sprt merely being on.
+            const short = stopped !== null && got !== undefined && got < expect
+            if (!parsed || (got !== expect && !short)) {
               return reject(new Error(`${label} reported ${got ?? 'no'} games, expected ${expect}`))
             }
             resolve(parsed)
@@ -571,6 +692,8 @@ if (opts['shard-start'] !== undefined) {
     } catch (err) {
       for (const c of children) c.kill()
       throw err
+    } finally {
+      if (stopDir) rmSync(stopDir, { recursive: true, force: true })
     }
   }
 
@@ -645,6 +768,31 @@ if (opts['shard-start'] !== undefined) {
       `  NOTE: both arms run in one process and hold separate module-level TTs, so each\n` +
         `  absolute score sits below a solo run. The pairing is unaffected — it is equal for both.`,
     )
+
+    if (wantSprt) {
+      // Recomputed over everything that finished, which is a few pairs more than
+      // the running total that triggered the stop: shards complete the pair they
+      // are in. It is the better statistic of the two, so it is the verdict.
+      const final = sprt(merged.pairHist, sprtDelta)
+      const verdict =
+        final.decision === 'H1'
+          ? `H1 accepted: ${agentNames[0]} is better by at least ${pp(sprtDelta)}`
+          : final.decision === 'H0'
+            ? `H0 accepted: no gain of ${pp(sprtDelta)} for ${agentNames[0]}`
+            : `inconclusive — ${stopped ? 'the extra pairs pulled it back inside the bounds' : 'the game cap was reached first'}`
+      console.log('')
+      console.log(`  SPRT (H0 +0.00pt vs H1 ${pp(sprtDelta)}, alpha=beta=0.05): ${verdict}`)
+      console.log(`    LLR ${final.llr.toFixed(2)} against bounds ${SPRT_LOWER.toFixed(2)} / ${SPRT_UPPER.toFixed(2)} after ${n} pairs`)
+      if (stopped) {
+        const at = stopped as SprtState
+        console.log(`    stopped early at ${at.n} pairs (LLR ${at.llr.toFixed(2)}) of the ${games * seeds.length} requested`)
+        console.log(
+          `  NOTE: reproducible in its DECISION, not in its game count — with --jobs > 1 the\n` +
+            `  pairs finished at the stop are not a prefix of the match, so a rerun stops\n` +
+            `  somewhere else. Record --jobs beside the result as always.`,
+        )
+      }
+    }
   }
 
   console.log('')

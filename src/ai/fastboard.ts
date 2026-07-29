@@ -96,14 +96,25 @@ export const CELL_SPACE = 1 << 20
  * so the fringe cells one step beyond a ±511 coordinate cost at worst a
  * duplicated move, in a position make() refuses to create in the first place.
  */
-const winStamp = new Uint32Array(CELL_SPACE * 2) // cell*2 + color
+const winStamp = new Uint16Array(CELL_SPACE * 2) // cell*2 + color
 let winGen = 0
-const moveStamp = new Uint32Array(CELL_SPACE) // cell
+const moveStamp = new Uint16Array(CELL_SPACE) // cell
 let moveGen = 0
 
-/** Advance a lane's generation, wiping on the (2³²-clears-away) wrap. */
-export function nextGen(stamp: Uint32Array, gen: number): number {
-  const next = (gen + 1) >>> 0
+/**
+ * Advance a lane's generation, wiping on the wrap.
+ *
+ * The lanes are 16-bit rather than 32-bit purely for residency: three of them
+ * over the 2²⁰ cell space is 20 MB at 32 bits and 10 MB at 16, always resident
+ * in the browser worker alongside the TT's 24 MB. The width is load-bearing
+ * here, though — the modulus below **must** match the array's, or a stored stamp
+ * truncates while the compared generation keeps counting, and a stale stamp from
+ * generation `g` starts aliasing live generation `g + 65536`: silently missed
+ * wins, not merely redundant work. A wipe every 65 535 generations costs ~0.3 ms
+ * and lands roughly once per few seconds of search.
+ */
+export function nextGen(stamp: Uint16Array, gen: number): number {
+  const next = (gen + 1) & 0xffff
   if (next !== 0) return next
   stamp.fill(0)
   return 1

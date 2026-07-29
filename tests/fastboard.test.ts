@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mulberry32 } from '../src/ai/arena'
-import { cellOf, FastBoard, ILLEGAL, OK } from '../src/ai/fastboard'
+import { cellOf, FastBoard, ILLEGAL, nextGen, OK } from '../src/ai/fastboard'
 import { positionHash } from '../src/ai/search'
 import { key } from '../src/game/board'
 import { applyMove, newGame } from '../src/game/engine'
@@ -225,6 +225,26 @@ describe('FastBoard differential vs engine', () => {
     const after: number[] = []
     fb.moves(after)
     expect(after).toEqual(snapshot)
+  })
+
+  it('wipes a stamp lane when the generation wraps', () => {
+    // The lanes are Uint16Array, so nextGen's modulus has to be the array's own.
+    // A real search never reaches 65 535 generations inside one test, and the
+    // failure it would hit there is silent — a stamp written at generation g
+    // reading as live at g + 65536, i.e. a cell wrongly believed visited — so
+    // drive the wrap directly.
+    const lane = new Uint16Array(4)
+    let gen = nextGen(lane, 0)
+    expect(gen).toBe(1)
+    lane[2] = gen
+
+    gen = nextGen(lane, 0xfffe)
+    expect(gen).toBe(0xffff) // last generation before the wrap: no wipe yet
+    expect(lane[2]).toBe(1)
+
+    gen = nextGen(lane, gen)
+    expect(gen).toBe(1) // wrapped past 0, which is the "never stamped" value
+    expect(lane[2]).toBe(0) // and wiped, so the old stamp cannot alias the new gen
   })
 
   it('round-trips fromState/toBoard on a nontrivial position', () => {
