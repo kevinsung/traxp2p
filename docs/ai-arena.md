@@ -542,3 +542,55 @@ whatever the app actually ships.
   Also tried and neutral: an edge pre-filter on the verifier's probe loop, skipping tiles
   `make()` would reject anyway. Exactly node-identical (572 289 nodes to complete depth 5,
   both builds) and worth ~0.7% wall clock. Not kept.
+
+- **2026-07-29 — flat-grid FastBoard: 2.3× node rate, +2.60pt, PROMOTED.** `FastBoard.tiles`
+  was the last hash on the hot path — a `Map<number, number>` probed several times per
+  neighbour in `make`, the cascade, `moves`, `walk` and `evalWhite`. It is now an
+  `Int8Array` over the whole 2²⁰ cell space (`grid`), plus an `Int32Array` stack of the
+  occupied cells (`occ` / `occCount`) to iterate. A tile is stored as `index + 1` with 0
+  reserved for empty, so a fresh zero-filled array is already an empty board and every
+  emptiness test is a compare against 0; `CELL_CODE` and `CELL_OTHER_END` are the neighbour
+  lookup tables re-indexed by grid value so the hot loops never shift the index back.
+
+  | | Map | grid |
+  |---|---|---|
+  | nodes/s @ `--budget 1500` | 12.2k | **29.5k** (2.4×) |
+  | nodes/s @ `--nodes 20000` | 10.1k | **23.1k** (2.29×) |
+  | mean completed depth @ 1500 ms | 4.50 | **5.03** |
+  | nodes to complete depth 3 / 4 / 5 | 13 784 / 150 845 / 469 434 | identical |
+
+  **Gate** (`--agents prev,current --games 1000 --seeds 1,2 --budget 1500 --jobs 16 --diag`,
+  against a temporary snapshot of `7df1817`, since deleted): **−2.60pt paired for `prev`**,
+  95% CI −4.01 to −1.19. Losses 133 → 81 over 2000 games.
+
+  | bucket | Map | grid |
+  |---|---|---|
+  | `forkWidth == 1` — needs depth | 76 | **32** |
+  | `forkWidth >= 2` — needs threat detection | 55 | 47 |
+
+  Half a ply cut the depth bucket by 58% and the fork bucket by 15%, which is the same split
+  the previous round saw and further evidence that forks are not a depth problem.
+
+  **This is a behaviour-neutral change, and that was checked rather than assumed.** The
+  occupied stack reproduces the Map's insertion order exactly — placements always append and
+  removals always come in exact reverse, which is the invariant `unmake` and `rollback`
+  already relied on — so move generation order, and hence the whole search, is unchanged.
+  Node counts on the bench fixture are byte-identical at every depth and at `--nodes 20000`
+  (679 204 both arms), and a direct probe of the two `chooseMove`s over seeded self-play
+  games produced identical transcripts.
+
+  **Worth knowing for future gates: `--nodes` pairing against the analyst is not exact, even
+  for a provably identical build.** The equal-work gate read −0.45pt (CI −2.00 to +1.10) —
+  level, and correctly so, but it should have been exactly 0.00 and was not. The arms' game
+  lengths and depth histograms differ slightly. It is not our side: with the search proven
+  bit-identical above, the divergence is inside `suggest()`, which is not reproducible across
+  the two arms despite `Math.random` being seeded per game per arm. So read an equal-work
+  gate as "level within noise", never as an identity check — use `npm run bench` for that.
+
+  **The one real hazard, and it is worth remembering if any flat array is added later.** On a
+  Map, a lookup outside the board came back `undefined` and read as empty. On a flat grid a
+  read at `y = 1024` silently aliases `(x + 1, y = 0)`. `moves()` reads the edge masks of a
+  candidate cell, which sits *two* steps from an occupied one, so `COORD_LIMIT` dropped from
+  511 to 510: occupied coordinates cap at ±509 and every index any loop here can form stays
+  inside `[1, 1023]` on both axes, making the wrap unreachable rather than merely unlikely.
+  `tests/fastboard.test.ts` pins the new limit.

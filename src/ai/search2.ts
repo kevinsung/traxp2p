@@ -1,7 +1,7 @@
 import { ALL_TILES } from '../game/tiles'
 import { LINE_SPAN } from '../game/wins'
 import { WEIGHTS, WIN_SCORE } from './eval'
-import { CELL_SPACE, cellOf, cellX, cellY, DELTA, DX, DY, FastBoard, ILLEGAL, nextGen, OTHER_END, TILE_CODE } from './fastboard'
+import { CELL_CODE, CELL_OTHER_END, CELL_SPACE, cellOf, cellX, cellY, DELTA, DX, DY, FastBoard, ILLEGAL, nextGen } from './fastboard'
 import type { GameState, Move, TileKind } from '../game/types'
 import type { SearchLimits, SearchResult } from './search'
 
@@ -47,8 +47,8 @@ function walkEval(fb: FastBoard, startCell: number, d: number, color: number): n
   let cur = startCell
   for (;;) {
     const n = cur + DELTA[d]
-    const nt = fb.tiles.get(n)
-    if (nt === undefined) return cur * 4 + d
+    const nv = fb.grid[n]
+    if (nv === 0) return cur * 4 + d
     if (n === startCell) return -1
     evalStamp[n * 2 + color] = evalGen
     const x = cellX(n)
@@ -57,7 +57,7 @@ function walkEval(fb: FastBoard, startCell: number, d: number, color: number): n
     if (x > compMaxX) compMaxX = x
     if (y < compMinY) compMinY = y
     if (y > compMaxY) compMaxY = y
-    d = OTHER_END[nt * 4 + ((d + 2) & 3)]
+    d = CELL_OTHER_END[nv * 4 + ((d + 2) & 3)]
     cur = n
   }
 }
@@ -104,10 +104,10 @@ function closesInOne(fb: FastBoard, color: number, cellA: number, cellB: number)
   const cells = probeCells
   cells.clear()
   for (const c of [cellA, cellB]) {
-    if (!fb.tiles.has(c)) cells.add(c)
+    if (fb.grid[c] === 0) cells.add(c)
     for (let d = 0; d < 4; d++) {
       const n = c + DELTA[d]
-      if (!fb.tiles.has(n)) cells.add(n)
+      if (fb.grid[n] === 0) cells.add(n)
     }
   }
   const want = color + 1 // FastBoard.make: 1 = W_WINS, 2 = R_WINS
@@ -137,12 +137,15 @@ export function evalWhite(fb: FastBoard): number {
   const threats = [0, 0]
   evalGen = nextGen(evalStamp, evalGen)
   flagged.length = 0
-  // Iterate entries, not keys: the tile index comes free with the cell, where
-  // keys() + get() pays a second hash probe per tile on the hottest loop there
-  // is. Safe against the mutation closesInOne performs only because that runs
-  // after this loop, off the `flagged` list.
-  for (const [cell, tile] of fb.tiles) {
-    const code = TILE_CODE[tile]
+  // Iterating the occupied list, not the grid, and reading the tile back off
+  // the grid — an array index, where the Map this replaced paid a hash probe
+  // per tile on the hottest loop there is. Safe against the mutation
+  // closesInOne performs only because that runs after this loop, off the
+  // `flagged` list; `occ` is therefore also stable across it.
+  const occ = fb.occ
+  for (let i = 0, count = fb.occCount; i < count; i++) {
+    const cell = occ[i]
+    const code = CELL_CODE[fb.grid[cell]]
     for (let color = 0; color < 2; color++) {
       if (evalStamp[cell * 2 + color] === evalGen) continue
       evalStamp[cell * 2 + color] = evalGen

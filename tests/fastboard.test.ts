@@ -175,21 +175,23 @@ describe('FastBoard differential vs engine', () => {
 
   it('throws at the coordinate limit rather than wrapping the packed field', () => {
     // The 10-bit encoding is what lets the track walks index a flat stamp array
-    // instead of hashing into a Set; the guard is what keeps a coordinate from
-    // silently wrapping into a *different* cell if a game ever ran that long.
+    // instead of hashing into a Set, and the board itself be a flat grid; the
+    // guard is what keeps a coordinate from silently wrapping into a *different*
+    // cell if a game ever ran that long. The limit is 510 rather than 511
+    // because moves() reads two steps out from an occupied cell.
     const fb = new FastBoard()
     for (const [x, y] of [
-      [511, 0],
-      [-511, 0],
-      [0, 511],
-      [0, -511],
+      [510, 0],
+      [-510, 0],
+      [0, 510],
+      [0, -510],
       [600, -700],
     ]) {
       expect(() => fb.make(cellOf(x, y), 0), `(${x}, ${y})`).toThrow(/out of range/)
     }
     // One inside the limit is a normal move — rejected here only because the
     // first tile has to go on the origin.
-    expect(fb.make(cellOf(510, 0), 0)).toBe(ILLEGAL)
+    expect(fb.make(cellOf(509, 0), 0)).toBe(ILLEGAL)
     expect(fb.make(cellOf(0, 0), 0)).not.toBe(ILLEGAL)
   })
 

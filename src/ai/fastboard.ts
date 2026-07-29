@@ -17,15 +17,25 @@ import type { Board, Dir, GameState } from '../game/types'
  * 10 bits per axis, so a cell index fits in 2²⁰ and can therefore *address a
  * flat array* — which is the entire reason for the narrow field: it is what
  * lets the track walks below replace their per-call `Set<number>` with a stamp
- * array. The range costs nothing in practice: the arena's ply cap is 300, so no
- * coordinate can reach ±300 even in a pathological game, and make() still
- * throws rather than silently wrapping.
+ * array, and the board itself be a flat grid rather than a Map. The range costs
+ * nothing in practice: the arena's ply cap is 300, so no coordinate can reach
+ * ±300 even in a pathological game, and make() throws rather than silently
+ * wrapping.
  */
 export const SHIFT = 10
 const MASK = 0x3ff
 const CENTER = 512
-/** make() throws beyond this rather than silently wrapping the 10-bit field. */
-const COORD_LIMIT = 511
+/**
+ * make() throws beyond this rather than silently wrapping the 10-bit field.
+ *
+ * 510 rather than 511 because of the grid: `moves()` reads the edge masks of a
+ * candidate cell, which is *two* steps from an occupied one, and on a flat array
+ * a read at y = 1024 does not come back empty the way a missing Map key did — it
+ * silently aliases (x+1, y = 0). Capping occupied coordinates at ±509 keeps every
+ * index any loop here can form inside [1, 1023] on both axes, so the wrap is
+ * unreachable rather than merely unlikely.
+ */
+const COORD_LIMIT = 510
 
 export const cellOf = (x: number, y: number): number => ((x + CENTER) << SHIFT) | (y + CENTER)
 export const cellX = (cell: number): number => (cell >>> SHIFT) - CENTER
@@ -43,15 +53,29 @@ export const DY: readonly number[] = [-1, 0, 1, 0]
 export const TILE_CODE = new Uint8Array(6)
 /** Red-edge mask → tile index, or -1 (valid tiles are exactly the popcount-2 codes). */
 export const TILE_OF_CODE = new Int8Array(16).fill(-1)
-/** [tile*4 + dir] → the other edge carrying the same color (track exit). */
-export const OTHER_END = new Uint8Array(24)
+/**
+ * The two lookups a *neighbour* needs, indexed by **grid value** rather than by
+ * tile index.
+ *
+ * `FastBoard.grid` stores a tile as `index + 1` and reserves 0 for "empty", so
+ * that a fresh zero-filled `Int8Array` is already an empty board and every
+ * emptiness test is `=== 0`. Consumers read a neighbour off the grid and then
+ * want its tables at that value; shifting the index back at each use would put a
+ * subtract on the hottest loops in the search for no reason. Slot 0 is unused.
+ * `TILE_CODE` stays tile-indexed for the callers that hold a raw tile index —
+ * the tile being placed, and the six candidates in `moves`.
+ */
+export const CELL_CODE = new Uint8Array(7)
+/** [gridValue*4 + dir] → the other edge carrying the same color (track exit). */
+export const CELL_OTHER_END = new Uint8Array(28)
 
 for (let t = 0; t < ALL_TILES.length; t++) {
   let code = 0
   for (let d = 0; d < 4; d++) if (ALL_TILES[t][d] === 'R') code |= 1 << d
   TILE_CODE[t] = code
+  CELL_CODE[t + 1] = code
   TILE_OF_CODE[code] = t
-  for (let d = 0; d < 4; d++) OTHER_END[t * 4 + d] = otherEnd(ALL_TILES[t], d as Dir)
+  for (let d = 0; d < 4; d++) CELL_OTHER_END[(t + 1) * 4 + d] = otherEnd(ALL_TILES[t], d as Dir)
 }
 
 /** Tile indices legal as the first move (indices of FIRST_TILES in ALL_TILES). */
@@ -91,10 +115,8 @@ export const CELL_SPACE = 1 << 20
  * would bump the generation out from under an in-progress `moves()` and it
  * would start re-emitting cells it had already seen.
  *
- * An index past the end is inert rather than unsafe — a typed-array read out of
- * range is `undefined` (never equal to a generation) and a write is dropped —
- * so the fringe cells one step beyond a ±511 coordinate cost at worst a
- * duplicated move, in a position make() refuses to create in the first place.
+ * Every index these lanes see is in range: COORD_LIMIT keeps occupied cells at
+ * ±509, and nothing here looks further than the two-step fringe around one.
  */
 const winStamp = new Uint16Array(CELL_SPACE * 2) // cell*2 + color
 let winGen = 0
@@ -138,8 +160,30 @@ export const W_WINS = 1
 export const R_WINS = 2
 
 export class FastBoard {
-  /** cell → tile index. Exposed for eval; treat as read-only outside this class. */
-  readonly tiles = new Map<number, number>()
+  /**
+   * cell → tile index + 1, 0 = empty. Exposed for eval; read-only outside.
+   *
+   * A flat `Int8Array` over the whole 2²⁰ cell space rather than the
+   * `Map<number, number>` this used to be — the last hash on the hot path. 1 MB
+   * per board sounds worse than it is: only the few pages around the origin are
+   * ever touched, and one instance exists per `chooseMove`.
+   */
+  readonly grid = new Int8Array(CELL_SPACE)
+  /**
+   * The occupied cells, in placement order; only `[0, occCount)` are live.
+   *
+   * The grid alone cannot be iterated (2²⁰ cells for a ~40-tile board), so this
+   * is the iteration order for `moves`, `toBoard` and `evalWhite`. A plain stack
+   * works because placements always append and removals always come in exact
+   * reverse — `unmake` and `rollback` already walk their frames backwards, which
+   * is the same invariant the Map's insertion order was silently relying on. It
+   * is what keeps move generation order identical to the Map version's, and
+   * hence the search's behaviour unchanged.
+   *
+   * Reassigned on growth, so re-read it rather than caching it across a make().
+   */
+  occ = new Int32Array(1024)
+  occCount = 0
   /** 0 = White to move, 1 = Red. */
   turn: 0 | 1 = 0
   private h1 = 0
@@ -164,7 +208,10 @@ export class FastBoard {
 
   toBoard(): Board {
     const b: Board = new Map()
-    for (const [cell, t] of this.tiles) b.set(key(cellX(cell), cellY(cell)), ALL_TILES[t])
+    for (let i = 0; i < this.occCount; i++) {
+      const cell = this.occ[i]
+      b.set(key(cellX(cell), cellY(cell)), ALL_TILES[this.grid[cell] - 1])
+    }
     return b
   }
 
@@ -194,18 +241,18 @@ export class FastBoard {
     if (x <= -COORD_LIMIT || x >= COORD_LIMIT || y <= -COORD_LIMIT || y >= COORD_LIMIT) {
       throw new Error(`FastBoard coordinate out of range: (${x}, ${y})`)
     }
-    if (this.tiles.has(cell)) return ILLEGAL
+    if (this.grid[cell] !== 0) return ILLEGAL
 
-    if (this.tiles.size === 0) {
+    if (this.occCount === 0) {
       if (x !== 0 || y !== 0) return ILLEGAL
       if (!FIRST_TILE_IDX.includes(tile)) return ILLEGAL
     } else {
       let touches = false
       for (let d = 0; d < 4; d++) {
-        const nt = this.tiles.get(cell + DELTA[d])
-        if (nt === undefined) continue
+        const nv = this.grid[cell + DELTA[d]]
+        if (nv === 0) continue
         touches = true
-        if (((TILE_CODE[nt] >>> ((d + 2) & 3)) & 1) !== ((TILE_CODE[tile] >>> d) & 1)) return ILLEGAL
+        if (((CELL_CODE[nv] >>> ((d + 2) & 3)) & 1) !== ((TILE_CODE[tile] >>> d) & 1)) return ILLEGAL
       }
       if (!touches) return ILLEGAL
     }
@@ -218,20 +265,20 @@ export class FastBoard {
     queue.length = 0
     for (let d = 0; d < 4; d++) {
       const n = cell + DELTA[d]
-      if (!this.tiles.has(n)) queue.push(n)
+      if (this.grid[n] === 0) queue.push(n)
     }
     while (queue.length > 0) {
       const c = queue.pop()!
-      if (this.tiles.has(c)) continue
+      if (this.grid[c] !== 0) continue
       let w = 0
       let r = 0
       let rMask = 0
       let known = 0
       for (let d = 0; d < 4; d++) {
-        const nt = this.tiles.get(c + DELTA[d])
-        if (nt === undefined) continue
+        const nv = this.grid[c + DELTA[d]]
+        if (nv === 0) continue
         known |= 1 << d
-        if ((TILE_CODE[nt] >>> ((d + 2) & 3)) & 1) {
+        if ((CELL_CODE[nv] >>> ((d + 2) & 3)) & 1) {
           r++
           rMask |= 1 << d
         } else {
@@ -250,7 +297,7 @@ export class FastBoard {
       this.place(c, forced, frame)
       for (let d = 0; d < 4; d++) {
         const n = c + DELTA[d]
-        if (!this.tiles.has(n)) queue.push(n)
+        if (this.grid[n] === 0) queue.push(n)
       }
     }
 
@@ -288,7 +335,7 @@ export class FastBoard {
   moves(out: number[], constraints?: number[]): number {
     out.length = 0
     if (constraints) constraints.length = 0
-    if (this.tiles.size === 0) {
+    if (this.occCount === 0) {
       const origin = cellOf(0, 0)
       for (const t of FIRST_TILE_IDX) {
         out.push(origin * 8 + t)
@@ -298,19 +345,21 @@ export class FastBoard {
     }
     // Own stamp lane, deliberately not detectWins': see the note there.
     moveGen = nextGen(moveStamp, moveGen)
-    for (const cell of this.tiles.keys()) {
+    const occ = this.occ
+    for (let i = 0, count = this.occCount; i < count; i++) {
+      const cell = occ[i]
       for (let d = 0; d < 4; d++) {
         const n = cell + DELTA[d]
-        if (this.tiles.has(n) || moveStamp[n] === moveGen) continue
+        if (this.grid[n] !== 0 || moveStamp[n] === moveGen) continue
         moveStamp[n] = moveGen
         let wMask = 0
         let rMask = 0
         let occupied = 0
         for (let dd = 0; dd < 4; dd++) {
-          const nt = this.tiles.get(n + DELTA[dd])
-          if (nt === undefined) continue
+          const nv = this.grid[n + DELTA[dd]]
+          if (nv === 0) continue
           occupied++
-          if ((TILE_CODE[nt] >>> ((dd + 2) & 3)) & 1) rMask |= 1 << dd
+          if ((CELL_CODE[nv] >>> ((dd + 2) & 3)) & 1) rMask |= 1 << dd
           else wMask |= 1 << dd
         }
         for (let t = 0; t < 6; t++) {
@@ -328,16 +377,29 @@ export class FastBoard {
 
   /** Raw insert for fromState: no frame, no cascade, no win check. */
   private insert(cell: number, tile: number): void {
-    this.tiles.set(cell, tile)
-    this.hashXor(cell, tile)
-    this.grow(cell)
+    const x = cellX(cell)
+    const y = cellY(cell)
+    if (x <= -COORD_LIMIT || x >= COORD_LIMIT || y <= -COORD_LIMIT || y >= COORD_LIMIT) {
+      throw new Error(`FastBoard coordinate out of range: (${x}, ${y})`)
+    }
+    this.put(cell, tile)
   }
 
   private place(cell: number, tile: number, frame: Frame): void {
-    this.tiles.set(cell, tile)
+    this.put(cell, tile)
+    frame.placed.push(cell * 8 + tile)
+  }
+
+  private put(cell: number, tile: number): void {
+    this.grid[cell] = tile + 1
+    if (this.occCount === this.occ.length) {
+      const bigger = new Int32Array(this.occ.length * 2)
+      bigger.set(this.occ)
+      this.occ = bigger
+    }
+    this.occ[this.occCount++] = cell
     this.hashXor(cell, tile)
     this.grow(cell)
-    frame.placed.push(cell * 8 + tile)
   }
 
   /** Undo this frame's placements mid-make (illegal cascade); state exactly restored. */
@@ -349,9 +411,15 @@ export class FastBoard {
     this.maxY = frame.maxY
   }
 
+  /**
+   * Undo one placement. The pop is unconditional: callers only ever remove in
+   * exact reverse placement order, so `occ[occCount - 1]` is always `cell` (see
+   * the note on `occ`).
+   */
   private remove(packed: number): void {
     const cell = packed >>> 3
-    this.tiles.delete(cell)
+    this.grid[cell] = 0
+    this.occCount--
     this.hashXor(cell, packed & 7)
   }
 
@@ -385,7 +453,7 @@ export class FastBoard {
       const cell = p >>> 3
       for (let color = 0; color < 2; color++) {
         if (winStamp[cell * 2 + color] === winGen) continue
-        const code = TILE_CODE[this.tiles.get(cell)!]
+        const code = CELL_CODE[this.grid[cell]]
         let d1 = -1
         let d2 = -1
         for (let d = 0; d < 4; d++) {
@@ -426,12 +494,12 @@ export class FastBoard {
     let cur = startCell
     for (;;) {
       const n = cur + DELTA[d]
-      const nt = this.tiles.get(n)
-      if (nt === undefined) return cur * 4 + d
+      const nv = this.grid[n]
+      if (nv === 0) return cur * 4 + d
       // Re-entering the start tile closes the loop (see wins.ts trace).
       if (n === startCell) return -1
       winStamp[n * 2 + color] = winGen
-      d = OTHER_END[nt * 4 + ((d + 2) & 3)]
+      d = CELL_OTHER_END[nv * 4 + ((d + 2) & 3)]
       cur = n
     }
   }
