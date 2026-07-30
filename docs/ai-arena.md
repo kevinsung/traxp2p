@@ -834,3 +834,56 @@ whatever the app actually ships.
   missing is not a fork. **Item 1 of `scratch/ai-next-steps.md` is retired**, and nothing was
   gated for it — G1 prices as signal but wants both-side `closesInOne`, whose runtime cost
   (−18% node rate) was already measured to eat more than the vision buys.
+
+  ### Gate 1 — the fitted evaluation: measured, REJECTED (level)
+
+  `src/ai/search2fit.ts` is the shipped search with `evalWhite`'s body replaced by
+  `FIT_WEIGHTS · features` (`core+G3+G4`: tempo and the two-threat cliff, plus loop-separation
+  and per-axis line buckets in place of the smooth 100/dist² and max-of-axes curves). Val loss
+  **0.66610** against the shipped eval's **0.69225** — the best cheap configuration the
+  instrument found.
+
+  It **keeps the `closesInOne` mover short-circuit**, and that is the whole difference between
+  this and the `ml` branch's abandoned attempt. A verified win in one is worth +2.0pt and is a
+  *mechanism*, not a weight: no reweighting of positional features reproduces "the side to move
+  can simply play it". The corpus excludes those positions for the same reason, so the fit has
+  nothing to say about them and no business overwriting them.
+
+  Node rate first, since that is what has eaten every previous eval gain — **and it is free**:
+
+  | fixture | `pre` | `fit` |
+  |---|---|---|
+  | `losses` @ 1000 ms | 23.4k nodes/s, depth 4.63 | 23.5k nodes/s, depth 4.74 |
+  | `mixed` @ 1000 ms | 17.9k nodes/s, depth 3.39 | 17.9k nodes/s, depth 3.34 |
+
+  Gate (`--agents fit,pre --games 1000 --seeds 1,2 --budget 1500 --jobs 16 --diag --sprt`),
+  923 paired games, SPRT stopped it at 902:
+
+  | | `fit` | `pre` |
+  |---|---|---|
+  | score | 95.8% | 96.0% |
+  | paired delta | **−0.22pt** (95% CI −1.97 to +1.53) | |
+  | nodes/s in match | 45.3k | 43.4k |
+  | mean depth | 4.95 | 4.95 |
+  | losses | 39 | 37 |
+  | `forkWidth == 1` / `>= 2` | 20 / 18 | 22 / 14 |
+
+  **SPRT accepted H0.** Dead level, at an identical node rate and an identical depth.
+
+  The interesting part is that it did not *lose*. An eval whose two-threat cliff is 135 instead
+  of 10 000, whose loop curve is five bucket constants instead of 100/dist², and whose line
+  curve is nine buckets instead of a max over two smooth axes — fitted to outcomes rather than
+  guessed — plays exactly as well as the hand-written one. Together with the two magnitude
+  sweeps in the 2026-07-25 entry, the reading is that **at depth ~5 the eval's fine structure
+  is not what decides these games**; a 2.6pt improvement in val loss buys nothing on the board.
+  What has ever moved the number is *depth* and *mechanism* (`closesInOne`, partial-iteration
+  retention, the flat grid), never the shape of the positional curve.
+
+  `src/ai/search2fit.ts`, `src/ai/eval-fit.ts` and the `fit` registry entries are kept: the
+  instrument that produced them is reusable, and a future candidate term wants this arm to
+  measure against. `tests/features.test.ts` pins the fused implementation to
+  `FIT_WEIGHTS · extractCore` so it cannot rot silently — an off-by-one in a span bucket would
+  otherwise invalidate a 2000-game gate invisibly.
+
+  **Not done, deliberately:** a second-generation corpus. Same recipe, and the `ml` branch
+  measured gen-2 as a wash on 2026-07-13.
