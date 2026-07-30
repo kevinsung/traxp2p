@@ -10,7 +10,9 @@ import {
   FEATURE_NAMES,
   HAND,
 } from '../src/ai/features'
+import { FIT_WEIGHTS } from '../src/ai/eval-fit'
 import { evalWhite } from '../src/ai/search2'
+import { evalWhite as evalFit } from '../src/ai/search2fit'
 import { applyMove, newGame } from '../src/game/engine'
 import { legalMoves } from '../src/game/moves'
 import { replayTranscript } from '../src/game/transcript'
@@ -112,6 +114,30 @@ describe('features', () => {
       if (RARE.has(j)) continue
       expect(seen[j], `${FEATURE_NAMES[j]} was never nonzero`).toBeGreaterThan(0)
     }
+  })
+
+  /**
+   * The fitted variant's fused eval against the basis its weights came from.
+   *
+   * `src/ai/search2fit.ts` rewrites the bucket assignment inline for speed
+   * instead of building a feature vector, so nothing otherwise guarantees it
+   * computes the function that was actually fitted — an off-by-one in a span
+   * bucket would be invisible and would quietly invalidate a 2000-game gate.
+   */
+  it('search2fit computes FIT_WEIGHTS · features', { timeout: 120_000 }, () => {
+    let checked = 0
+    for (const state of randomPositions(30, 60)) {
+      const fb = FastBoard.fromState(state)
+      const fused = evalFit(fb)
+      const info = extractVerified(fb, buf)
+      if (info.moverWins) {
+        expect(Math.abs(fused)).toBe(500_000)
+        continue
+      }
+      checked++
+      expect(dot(FIT_WEIGHTS, buf), `at ${state.board.size} tiles`).toBeCloseTo(fused, 9)
+    }
+    expect(checked).toBeGreaterThan(200)
   })
 
   /**

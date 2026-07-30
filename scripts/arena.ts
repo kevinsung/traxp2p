@@ -24,6 +24,7 @@ import { mergeTallies, playGames, summarize, type MatchTally } from '../src/ai/a
 import { AI_LIMITS, chooseMove as chooseMoveV1, type SearchLimits } from '../src/ai/search'
 import { chooseMove as chooseMoveV2 } from '../src/ai/search2'
 import { chooseMove as chooseMoveBase } from '../src/ai/search2base'
+import { chooseMove as chooseMoveFit } from '../src/ai/search2fit'
 import { chooseMove as chooseMovePre } from '../src/ai/search2pre'
 
 const SCRIPT = fileURLToPath(import.meta.url)
@@ -56,6 +57,9 @@ function buildRegistry(limits: SearchLimits): Record<string, Agent> {
     // evaluation-pricing round (src/ai/search2pre.ts). `base` is four promoted
     // rounds stale and is not a valid pairing arm for that round; this is.
     pre: searchAgent('pre', chooseMovePre, limits),
+    // The shipped search with an outcome-fitted evaluation instead of the
+    // hand-written one (src/ai/search2fit.ts), under gate 2026-07-30.
+    fit: searchAgent('fit', chooseMoveFit, limits),
     v1: searchAgent('v1', chooseMoveV1, limits),
     random: randomAgent('random'),
   }

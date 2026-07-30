@@ -42,6 +42,7 @@ import { gameSeeds, mulberry32 } from '../src/ai/arena'
 import { chooseMove as chooseV1, type SearchLimits, type SearchResult } from '../src/ai/search'
 import { AI_LIMITS, chooseMove as chooseCurrent } from '../src/ai/search2'
 import { chooseMove as chooseBase } from '../src/ai/search2base'
+import { chooseMove as chooseFit } from '../src/ai/search2fit'
 import { chooseMove as choosePre } from '../src/ai/search2pre'
 import { applyMove, newGame } from '../src/game/engine'
 import { legalMoves } from '../src/game/moves'
@@ -69,6 +70,8 @@ const CHOOSERS: Record<string, ChooseFn> = {
   // evaluation-pricing round. `base` is four promoted rounds stale, so it is not
   // a valid pairing arm for that round — this is. See src/ai/search2pre.ts.
   pre: choosePre,
+  // The shipped search with an outcome-fitted evaluation; see src/ai/search2fit.ts.
+  fit: chooseFit,
   v1: chooseV1,
 }
 

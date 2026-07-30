@@ -1,6 +1,5 @@
 import { ALL_TILES } from '../game/tiles'
 import { LINE_SPAN } from '../game/wins'
-import { WEIGHTS, WIN_SCORE } from './eval'
 import { cellOf, cellX, cellY, DELTA, DX, DY, FastBoard, ILLEGAL, OTHER_END, TILE_CODE } from './fastboardbase'
 import type { GameState, Move, TileKind } from '../game/types'
 import type { SearchLimits, SearchResult } from './search'
@@ -19,6 +18,26 @@ import type { SearchLimits, SearchResult } from './search'
  * Dead code as far as the app bundle is concerned: src/ai/worker.ts imports
  * only ./search2, so nothing here is shipped.
  */
+
+/**
+ * The evaluation weights **as of this snapshot**, inlined rather than imported
+ * from ./eval.
+ *
+ * A frozen arm that reads live constants is not frozen. Re-pricing a term in
+ * eval.ts would move *both* arms of a pairing by the same amount and the gate
+ * would silently measure nothing — and re-pricing is exactly what the
+ * 2026-07-30 round does. Values are eval.ts's as of commit ad67e68.
+ */
+const WEIGHTS = {
+  loop: 100,
+  line: 60,
+  tempo: 10,
+  lineDouble: 10_000,
+  loopDouble: 10_000,
+  winInOne: 500_000,
+}
+
+const WIN_SCORE = 1_000_000
 
 /**
  * v2 search: the same iterative-deepening negamax as search.ts, run over a

@@ -1,36 +1,52 @@
 import { ALL_TILES } from '../game/tiles'
 import { LINE_SPAN } from '../game/wins'
+import { FIT_WEIGHTS } from './eval-fit'
 import { WEIGHTS, WIN_SCORE } from './eval'
+import {
+  F_LINE1_S3,
+  F_LINE2_S3,
+  F_LINE2_S6,
+  F_LINE_DOUBLE,
+  F_LOOP_BLOCKED,
+  F_LOOP_D1,
+  F_LOOP_D2,
+  F_LOOP_D3,
+  F_LOOP_FAR,
+  F_TEMPO,
+  F_TWO_THREAT,
+} from './features'
 import { CELL_CODE, CELL_OTHER_END, CELL_SPACE, cellOf, cellX, cellY, DELTA, DX, DY, FastBoard, ILLEGAL, nextGen } from './fastboard'
 import type { GameState, Move, TileKind } from '../game/types'
 import type { SearchLimits, SearchResult } from './search'
 
 /**
- * v2 search: the same iterative-deepening negamax as search.ts, run over a
- * mutable FastBoard with make/unmake instead of immutable engine states. The
- * node rate is ~10-50x v1's, which buys extra plies at the same time budget.
- * Public shape matches v1 so it drops into searchAgent and the worker.
+ * VARIANT under gate — the shipped search with a **fitted** evaluation.
+ *
+ * Byte-for-byte src/ai/search2.ts from the eval cache down; only `evalWhite`'s
+ * body differs. Instead of the hand-written terms it is the dot product of
+ * `FIT_WEIGHTS` with the feature basis of src/ai/features.ts, fitted to the
+ * outcomes of 230k self-play positions (`core+G3+G4`: tempo and the two-threat
+ * cliff, plus loop-separation and per-axis line buckets in place of the smooth
+ * 100/dist² and max-of-axes curves). Val loss 0.66610 against the shipped
+ * eval's 0.69225.
+ *
+ * **It keeps the `closesInOne` mover short-circuit.** That is deliberate and it
+ * is the difference between this and the abandoned `ml`-branch attempt: a
+ * verified win in one is worth +2.0pt (docs/ai-arena.md, 2026-07-26) and it is a
+ * *mechanism*, not a weight — no reweighting of positional features reproduces
+ * "the side to move can simply play it". The corpus deliberately excludes those
+ * positions for the same reason, so the fit has nothing to say about them.
+ *
+ * Registered as `fit`. Dead code as far as the app bundle is concerned
+ * (src/ai/worker.ts imports only ./search2) — which matters here, because
+ * importing ./features would otherwise drag a 4 MB stamp lane into the worker.
+ * Promotion would mean inlining the weights and the bucket code, not shipping
+ * this import graph.
  */
 
-/**
- * Fixed strength of the app's computer opponent (same budget as v1).
- *
- * `topMargin` is the root's move-variety pool: it picks uniformly among moves
- * within this many points of best, so the computer does not replay an identical
- * game. Lowered from 5 to 1 on 2026-07-26: against trax-analyst that is 82.3%
- * vs 80.9% (4000 games each, 4 seeds, --nodes 20000), i.e. +1.4pt with a 95% CI
- * of -0.3 to 3.1 — positive or level on every seed but NOT significant on its
- * own, and largely carried by one seed. 1 still breaks genuine ties at random,
- * so the variety the pool exists for survives; 0 buys nothing further and would
- * make the opponent fully deterministic.
- *
- * Beware measuring this: the score against a fixed opponent moves ~3pt with the
- * arena's `--jobs` count, because shard size decides how many games share the
- * transposition table. Only compare runs at equal --jobs.
- */
 export const AI_LIMITS: SearchLimits = { budgetMs: 1500, maxDepth: 16, topMargin: 1 }
 
-// --- Evaluation: faithful int port of src/ai/eval.ts --------------------------
+// --- Evaluation: FIT_WEIGHTS · features, fused into one walk -------------------
 
 // Component bounds tracked by walkEval (module scratch; search is single-threaded).
 let compMinX = 0
@@ -41,7 +57,7 @@ let compMaxY = 0
 /**
  * Walk `color`'s track from `startCell` leaving in direction `d`, marking
  * visited and growing the comp* bounds. Returns -1 for a loop, else the open
- * end packed as cell*4 + exitDir.
+ * end packed as cell*4 + exitDir. Identical to search2.ts's.
  */
 function walkEval(fb: FastBoard, startCell: number, d: number, color: number): number {
   let cur = startCell
@@ -62,48 +78,25 @@ function walkEval(fb: FastBoard, startCell: number, d: number, color: number): n
   }
 }
 
-/** Port of eval.ts loopThreat over exit coordinates and end directions. */
-function loopThreat(eaX: number, eaY: number, ebX: number, ebY: number, dA: number, dB: number): number {
-  const dist = Math.abs(eaX - ebX) + Math.abs(eaY - ebY)
-  if (dist === 0) return WEIGHTS.loop
-  if (dA === ((dB + 2) & 3)) {
-    if (DX[dA] * (ebX - eaX) + DY[dA] * (ebY - eaY) <= 0) return 0
-  }
-  return WEIGHTS.loop / (dist * dist)
+/** Span bucket offset, shared by the one-open-end and two-open-end line groups. */
+function spanBucket(span: number): number {
+  if (span <= 3) return 0
+  if (span <= 5) return 1
+  if (span === 6) return 2
+  if (span === 7) return 3
+  return 4
 }
 
-/** Port of eval.ts isLineDouble: one short of a line and open at both ends. */
-const isLineDouble = (span: number, openA: boolean, openB: boolean): boolean =>
-  openA && openB && span >= LINE_SPAN - 1
-
-/** Port of eval.ts linePotential's per-axis term. */
-function axisPotential(span: number, openA: boolean, openB: boolean): number {
-  const open = (openA ? 1 : 0) + (openB ? 1 : 0)
-  if (open === 0) return 0
-  if (isLineDouble(span, openA, openB)) return WEIGHTS.lineDouble
-  const mult = open === 2 ? 1.5 : 0.75
-  return WEIGHTS.line * mult * (Math.min(span, LINE_SPAN) / LINE_SPAN) ** 2
-}
-
-/**
- * evalWhite's own visited lane, same generation-stamp scheme as FastBoard's
- * (see the note there) and deliberately separate from it, since `closesInOne`
- * calls make() — and therefore detectWins — from inside an eval.
- */
+/** evalWhite's own visited lane; see the note in search2.ts. */
 const evalStamp = new Uint16Array(CELL_SPACE * 2) // cell*2 + color
 let evalGen = 0
 
-/** Flagged tracks awaiting verification: [color, exitCellA, exitCellB] triples. */
+/** Flagged tracks awaiting verification: [exitCellA, exitCellB] pairs. */
 const flagged: number[] = []
 /** Probe scratch: candidate cells for one track, deduped. */
 const probeCells = new Set<number>()
 
-/**
- * Port of eval.ts closesInOne: can this track be completed by one legal move?
- * Settled by playing the candidates on the board itself rather than measuring
- * the gap between the ends. Turn-independent, so the eval cache stays keyed on
- * position alone.
- */
+/** Identical to search2.ts's closesInOne — the mechanism this variant keeps. */
 function closesInOne(fb: FastBoard, color: number, cellA: number, cellB: number): boolean {
   const cells = probeCells
   cells.clear()
@@ -127,25 +120,24 @@ function closesInOne(fb: FastBoard, color: number, cellA: number, cellB: number)
 }
 
 /**
- * Heuristic score of a non-terminal position for White; identical math to
- * eval.ts evaluate (tempo + loop threats + end-aware line potential).
- * evaluate-for-color is this value negated for Red (antisymmetric).
+ * Fitted heuristic score of a non-terminal position for White.
  *
- * Exported only so tests/ai2.test.ts can differential-test it against eval.ts's
- * evaluate(): the two are hand-maintained twins over different board
- * representations, and nothing else was holding them equal.
+ * The bucket boundaries here must stay identical to src/ai/features.ts's, since
+ * that is the basis the weights were fitted over — including that separation 0
+ * falls in the `d1` bucket (it cannot occur: two same-colored edges facing an
+ * empty cell is a forced fill) and that a *blocked* pair is tested before
+ * separation, matching `loopThreat` returning 0 there.
+ *
+ * The threat count keeps the hand eval's meaning exactly: a loop whose ends are
+ * one step apart, or a line open at both ends one short of the span. In this
+ * parametrisation those are "the d1 bucket fired" and "the line_double bucket
+ * fired", so no magnitude comparison is involved.
  */
 export function evalWhite(fb: FastBoard): number {
-  let score = fb.turn === 0 ? WEIGHTS.tempo : -WEIGHTS.tempo
-  /** Per color, tracks one move from completing — see eval.ts's loopDouble. */
+  let score = fb.turn === 0 ? FIT_WEIGHTS[F_TEMPO] : -FIT_WEIGHTS[F_TEMPO]
   const threats = [0, 0]
   evalGen = nextGen(evalStamp, evalGen)
   flagged.length = 0
-  // Iterating the occupied list, not the grid, and reading the tile back off
-  // the grid — an array index, where the Map this replaced paid a hash probe
-  // per tile on the hottest loop there is. Safe against the mutation
-  // closesInOne performs only because that runs after this loop, off the
-  // `flagged` list; `occ` is therefore also stable across it.
   const occ = fb.occ
   for (let i = 0, count = fb.occCount; i < count; i++) {
     const cell = occ[i]
@@ -164,36 +156,54 @@ export function evalWhite(fb: FastBoard): number {
       compMinX = compMaxX = cellX(cell)
       compMinY = compMaxY = cellY(cell)
       const endA = walkEval(fb, cell, d1, color)
+      // A closed loop carries no slot in this basis, exactly as it carries no
+      // term in the hand eval.
+      if (endA === -1) continue
+      const endB = walkEval(fb, cell, d2, color)
+      const aCell = endA >>> 2
+      const aDir = endA & 3
+      const bCell = endB >>> 2
+      const bDir = endB & 3
+      const eaX = cellX(aCell) + DX[aDir]
+      const eaY = cellY(aCell) + DY[aDir]
+      const ebX = cellX(bCell) + DX[bDir]
+      const ebY = cellY(bCell) + DY[bDir]
+
       let v = 0
-      if (endA !== -1) {
-        // A closed loop scores 0 here, exactly as in eval.ts (it is terminal
-        // anyway and never reached by eval in a live search).
-        const endB = walkEval(fb, cell, d2, color)
-        const aCell = endA >>> 2
-        const aDir = endA & 3
-        const bCell = endB >>> 2
-        const bDir = endB & 3
-        const eaX = cellX(aCell) + DX[aDir]
-        const eaY = cellY(aCell) + DY[aDir]
-        const ebX = cellX(bCell) + DX[bDir]
-        const ebY = cellY(bCell) + DY[bDir]
-        const loop = loopThreat(eaX, eaY, ebX, ebY, aDir, bDir)
-        const spanY = compMaxY - compMinY + 1
-        const spanX = compMaxX - compMinX + 1
-        const vLo = eaY < compMinY || ebY < compMinY
-        const vHi = eaY > compMaxY || ebY > compMaxY
-        const hLo = eaX < compMinX || ebX < compMinX
-        const hHi = eaX > compMaxX || ebX > compMaxX
-        const line = Math.max(axisPotential(spanY, vLo, vHi), axisPotential(spanX, hLo, hHi))
-        v = loop + line
-        if (loop >= WEIGHTS.loop || isLineDouble(spanY, vLo, vHi) || isLineDouble(spanX, hLo, hHi)) {
-          threats[color]++
-          // Verified below, once the walk is done: closesInOne mutates fb, and
-          // this loop is iterating fb.tiles.
-          if (color === fb.turn) flagged.push(cellOf(eaX, eaY), cellOf(ebX, ebY))
-        }
+      const dist = Math.abs(eaX - ebX) + Math.abs(eaY - ebY)
+      // `blocked` is exactly the condition under which loopThreat returns 0:
+      // colinear ends pointing apart, at nonzero separation.
+      const blocked = dist !== 0 && aDir === ((bDir + 2) & 3) && DX[aDir] * (ebX - eaX) + DY[aDir] * (ebY - eaY) <= 0
+      let converged = false
+      if (blocked) v += FIT_WEIGHTS[F_LOOP_BLOCKED]
+      else if (dist <= 1) {
+        v += FIT_WEIGHTS[F_LOOP_D1]
+        converged = true
+      } else if (dist === 2) v += FIT_WEIGHTS[F_LOOP_D2]
+      else if (dist === 3) v += FIT_WEIGHTS[F_LOOP_D3]
+      else v += FIT_WEIGHTS[F_LOOP_FAR] / (dist * dist)
+
+      let lineDouble = false
+      for (let axis = 0; axis < 2; axis++) {
+        const span = axis === 0 ? compMaxY - compMinY + 1 : compMaxX - compMinX + 1
+        const lo = axis === 0 ? compMinY : compMinX
+        const hi = axis === 0 ? compMaxY : compMaxX
+        const ea = axis === 0 ? eaY : eaX
+        const eb = axis === 0 ? ebY : ebX
+        const open = (ea < lo || eb < lo ? 1 : 0) + (ea > hi || eb > hi ? 1 : 0)
+        if (open === 0) continue
+        if (open === 2 && span >= LINE_SPAN - 1) {
+          v += FIT_WEIGHTS[F_LINE_DOUBLE]
+          lineDouble = true
+        } else if (open === 2) v += FIT_WEIGHTS[Math.min(F_LINE2_S3 + spanBucket(span), F_LINE2_S6)]
+        else v += FIT_WEIGHTS[F_LINE1_S3 + spanBucket(span)]
       }
+
       score += color === 0 ? v : -v
+      if (converged || lineDouble) {
+        threats[color]++
+        if (color === fb.turn) flagged.push(cellOf(eaX, eaY), cellOf(ebX, ebY))
+      }
     }
   }
   const mover = fb.turn
@@ -202,8 +212,8 @@ export function evalWhite(fb: FastBoard): number {
       return mover === 0 ? WEIGHTS.winInOne : -WEIGHTS.winInOne
     }
   }
-  if (threats[0] >= 2) score += WEIGHTS.loopDouble
-  if (threats[1] >= 2) score -= WEIGHTS.loopDouble
+  if (threats[0] >= 2) score += FIT_WEIGHTS[F_TWO_THREAT]
+  if (threats[1] >= 2) score -= FIT_WEIGHTS[F_TWO_THREAT]
   return score
 }
 

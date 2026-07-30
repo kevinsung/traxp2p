@@ -50,6 +50,7 @@ import { mulberry32 } from '../src/ai/arena'
 import { chooseMove as chooseV1, type SearchLimits, type SearchResult } from '../src/ai/search'
 import { chooseMove as chooseCurrent } from '../src/ai/search2'
 import { chooseMove as chooseBase } from '../src/ai/search2base'
+import { chooseMove as chooseFit } from '../src/ai/search2fit'
 import { chooseMove as choosePre } from '../src/ai/search2pre'
 import { replayTranscript } from '../src/game/transcript'
 import type { GameState } from '../src/game/types'
@@ -62,6 +63,8 @@ const CHOOSERS: Record<string, ChooseFn> = {
   base: chooseBase,
   /** Frozen pre-2026-07-30 search; the pairing arm for the eval-pricing round. */
   pre: choosePre,
+  /** The shipped search with an outcome-fitted evaluation. */
+  fit: chooseFit,
   v1: chooseV1,
 }
 

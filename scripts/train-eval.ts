@@ -193,8 +193,62 @@ function fitHandScale(data: Data, idx: Uint32Array): { scale: number; loss: numb
   return { scale: best, loss: bestLoss }
 }
 
-/** Adam on cross-entropy over `active` slots only; every other weight stays 0. */
+/**
+ * Per-slot 1/RMS over `idx`, for fitting in scaled units.
+ *
+ * This is not cosmetic. The slots span four orders of magnitude — `loop_sum`
+ * runs to ±100s of points while `two_threat` is ±1 — so the weight vector that
+ * fits has entries around 1e-5, and Adam's step is ~`lr` regardless of gradient
+ * size: at lr 0.02 it cannot resolve a 1e-5 weight at all, and the first run of
+ * this trainer diverged to a val loss *above* ln 2 (worse than predicting 0.5)
+ * for exactly that reason.
+ *
+ * RMS, not standard deviation: dividing is a pure rescale, which antisymmetry
+ * survives, while *centering* would need an intercept and would break it. Every
+ * slot has mean 0 over a color-balanced corpus anyway.
+ */
+function inverseRms(data: Data, idx: Uint32Array, active: readonly number[]): Float64Array {
+  const inv = new Float64Array(FEATURE_COUNT).fill(1)
+  for (const j of active) {
+    let sum = 0
+    for (const i of idx) {
+      const v = data.x[i * FEATURE_COUNT + j]
+      sum += v * v
+    }
+    const rms = Math.sqrt(sum / idx.length)
+    inv[j] = rms > 0 ? 1 / rms : 1
+  }
+  return inv
+}
+
+/**
+ * The temperature that best explains the data for these fitted weights, by the
+ * same 1-D scan the hand baseline gets. Every configuration is scored at its own
+ * best temperature, so a Δ val-loss between two of them is a difference in
+ * *ordering quality* rather than in how precisely Adam happened to land the
+ * overall scale. Scaling the whole vector cannot change move ordering, so this
+ * costs the comparison nothing.
+ */
+function bestTemp(data: Data, idx: Uint32Array, w: Float64Array, active: readonly number[]): number {
+  let best = 1
+  let bestLoss = Infinity
+  for (let e = -3; e <= 3; e += 0.0625) {
+    const s = 10 ** e
+    const l = loss(data, idx, w, active, s)
+    if (l < bestLoss) {
+      bestLoss = l
+      best = s
+    }
+  }
+  return best
+}
+
+/**
+ * Adam on cross-entropy over `active` slots only; every other weight stays 0.
+ * Fits in RMS-scaled units and returns weights in the original feature units.
+ */
 function fit(data: Data, trainIdx: Uint32Array, active: readonly number[], o: Opts, seed: number): Float64Array {
+  const inv = inverseRms(data, trainIdx, active)
   const w = new Float64Array(FEATURE_COUNT)
   const m = new Float64Array(FEATURE_COUNT)
   const v = new Float64Array(FEATURE_COUNT)
@@ -218,8 +272,10 @@ function fit(data: Data, trainIdx: Uint32Array, active: readonly number[], o: Op
       for (let k = start; k < end; k++) {
         const i = order[k]
         const base = i * FEATURE_COUNT
-        const err = sigmoid(score(data, i, w, active)) - data.y[i]
-        for (const j of active) grad[j] += err * data.x[base + j]
+        let z = 0
+        for (const j of active) z += w[j] * data.x[base + j] * inv[j]
+        const err = sigmoid(z) - data.y[i]
+        for (const j of active) grad[j] += err * data.x[base + j] * inv[j]
       }
       const size = end - start
       step++
@@ -233,6 +289,8 @@ function fit(data: Data, trainIdx: Uint32Array, active: readonly number[], o: Op
       }
     }
   }
+  // Back to the original feature units: z = Σ wₛ·(x·inv) = Σ (wₛ·inv)·x.
+  for (const j of active) w[j] *= inv[j]
   return w
 }
 
@@ -323,18 +381,55 @@ interface FitResult {
   losses: number[]
   /** Rescaled (points) weights per fold. */
   weights: Float64Array[]
+  /** The fitted weights and temperature per fold, for per-position comparisons. */
+  fits: Array<{ w: Float64Array; temp: number }>
 }
 
 function runConfig(data: Data, folds: readonly Fold[], config: Config, o: Opts): FitResult {
   const losses: number[] = []
   const weights: Float64Array[] = []
+  const fits: Array<{ w: Float64Array; temp: number }> = []
   for (const fold of folds) {
     const w = fit(data, fold.trainIdx, config.active, o, fold.seed)
-    losses.push(loss(data, fold.valIdx, w, config.active, 1))
+    const temp = bestTemp(data, fold.trainIdx, w, config.active)
+    losses.push(loss(data, fold.valIdx, w, config.active, temp))
+    fits.push({ w, temp })
     const k = stdOn(data, fold.trainIdx, null, config.active) / stdOn(data, fold.trainIdx, w, config.active)
     weights.push(Float64Array.from(w, (x) => x * k))
   }
-  return { config, losses, weights }
+  return { config, losses, weights, fits }
+}
+
+/** Cross-entropy of one position under one fit. */
+function rowLoss(data: Data, i: number, f: { w: Float64Array; temp: number }, active: readonly number[]): number {
+  const p = sigmoid(f.temp * score(data, i, f.w, active))
+  const yi = data.y[i]
+  return -(yi * Math.log(p + 1e-12) + (1 - yi) * Math.log(1 - p + 1e-12))
+}
+
+/**
+ * Standard error of one fold's Δ val-loss, computed **per validation position**.
+ *
+ * The reason the bar needs this: a group's Δ is a *paired* quantity — both arms
+ * are scored on the same positions — while the fold-to-fold spread of either
+ * arm's absolute loss is dominated by which positions landed in the validation
+ * set, and that noise cancels in the difference. Judging a paired Δ against
+ * unpaired spread is a category error, and it rejected differences here that
+ * reproduced to three digits on every fold. So the bar takes both: the Δ has to
+ * be reproducible across resamples *and* significant within a fold.
+ */
+function pairedStderr(data: Data, fold: Fold, a: FitResult, b: FitResult, index: number): number {
+  let n = 0
+  let mean = 0
+  let m2 = 0
+  for (const i of fold.valIdx) {
+    const d = rowLoss(data, i, a.fits[index], a.config.active) - rowLoss(data, i, b.fits[index], b.config.active)
+    n++
+    const delta = d - mean
+    mean += delta / n
+    m2 += delta * (d - mean)
+  }
+  return Math.sqrt(m2 / n / n)
 }
 
 /** The mean rescaled weight of each active slot, over the training seeds. */
@@ -388,24 +483,25 @@ if (o.groups) {
   console.log(`  vs the hand eval: ${signed(mean(core.losses) - baseVal)}`)
 
   console.log('')
-  console.log('group                     Δ val-loss    bar (3σ)    per-fold Δ                verdict   cost')
+  console.log('group                     Δ val-loss    bar (3σ)    per-fold Δ                  verdict   cost')
   const results: FitResult[] = []
   for (const g of GROUPS) {
     const r = runConfig(data, folds, configFor([g.id]), o)
     results.push(r)
     const perFold = r.losses.map((l, i) => l - core.losses[i])
     const delta = mean(perFold)
-    // The bar is 3× the *seed-to-seed* std of val loss, taken as the larger of
-    // the two configs' — the honest noise floor for a difference between them,
-    // and stricter than the std of the paired difference (which is printed too,
-    // since a group that helps on every fold is saying something either way).
-    const bar = 3 * Math.max(std(r.losses), std(core.losses))
+    // Reproducible across resamples *and* significant within a fold; see
+    // pairedStderr for why the fold-to-fold spread alone is the wrong test.
+    const acrossFolds = std(perFold)
+    const withinFold = mean(folds.map((f, i) => pairedStderr(data, f, r, core, i)))
+    const bar = 3 * Math.max(acrossFolds, withinFold)
     const verdict = -delta > bar ? 'SIGNAL' : 'noise'
     console.log(
       `${`${g.id} ${g.name}`.padEnd(25)} ${signed(delta)}      ${bar.toFixed(5)}     ` +
-        `${perFold.map(signed).join(' ').padEnd(25)} ${verdict.padEnd(9)} ${g.cost}`,
+        `${perFold.map(signed).join(' ').padEnd(27)} ${verdict.padEnd(9)} ${g.cost}`,
     )
   }
+  console.log('  (bar = 3× max of the fold-to-fold std of Δ and the within-fold per-position stderr)')
 
   console.log('')
   console.log('fitted weights, in eval points (mean over training seeds):')

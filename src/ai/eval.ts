@@ -14,10 +14,28 @@ export const WEIGHTS = {
   line: 60,
   /** Bonus for having the move. */
   tempo: 10,
-  /** A span-(LINE_SPAN-1) track open at both ends: completes at either end. */
-  lineDouble: 10_000,
-  /** Two threats one move from completing: the opponent cannot block both. */
-  loopDouble: 10_000,
+  /**
+   * A span-(LINE_SPAN-1) track open at both ends: completes at either end.
+   *
+   * 10 000 until 2026-07-30. See `loopDouble` for why it came down; the
+   * *condition* is `isLineDouble` and no longer depends on this value.
+   */
+  lineDouble: 100,
+  /**
+   * Two threats one move from completing: the opponent cannot block both.
+   *
+   * 10 000 until 2026-07-30, when outcome-fitted regression over 230k self-play
+   * positions priced this term at **66 points**, not 10 000 — the eval was
+   * overpricing it by two orders of magnitude. Two earlier sweeps went *up*
+   * (50 000, 500 000) and both measured level, so "magnitude does not matter
+   * here" was the standing conclusion; nobody had tried down.
+   *
+   * 100 rather than the fitted 66 so both cliffs still outrank every smooth term
+   * (the largest is 50.6, a double-open span-6 line): the *ordering* structure is
+   * unchanged and only the magnitude moves, which is what makes the gate a test
+   * of one thing.
+   */
+  loopDouble: 100,
   /**
    * The side to move has a track that a single legal move really does close.
    * Decisive — they simply play it — but deliberately far below WIN_SCORE, so
@@ -101,26 +119,49 @@ function loopThreat(exits: [Coord, Coord], dirs: [Dir, Dir]): number {
 }
 
 /**
+ * A track one short of LINE_SPAN and open at BOTH ends on one axis: it completes
+ * at either end, so the opponent cannot block both.
+ *
+ * This is the *condition*, deliberately separated from `WEIGHTS.lineDouble`,
+ * which is its score. The threat count below used to test `line >= lineDouble`,
+ * which was the same question only because the score was larger than every other
+ * term — so the score could not be re-priced without silently changing what
+ * counts as a threat, and re-pricing it is exactly what the 2026-07-30 round
+ * does. Detection and magnitude are now independent.
+ */
+const isLineDouble = (span: number, openA: boolean, openB: boolean): boolean =>
+  openA && openB && span >= LINE_SPAN - 1
+
+/** A track's line potential, and whether it is one move from a line either way. */
+interface LineInfo {
+  score: number
+  double: boolean
+}
+
+/**
  * Line threat of one track. Only ends that can actually extend the span —
  * exiting beyond the track's extreme row/column on that axis — count; a
  * capped end (the track turned sideways at its extreme) has no line
- * potential there. A track one short of LINE_SPAN that is open at BOTH ends
- * completes at either end, so the opponent cannot block both: score it as
- * practically decided (lineDouble).
+ * potential there.
  */
-function linePotential(comp: ComponentInfo): number {
-  if (!comp.exits) return 0
+function linePotential(comp: ComponentInfo): LineInfo {
+  if (!comp.exits) return { score: 0, double: false }
   const [ea, eb] = comp.exits
   const axis = (span: number, openA: boolean, openB: boolean): number => {
     const open = (openA ? 1 : 0) + (openB ? 1 : 0)
     if (open === 0) return 0
-    if (open === 2 && span >= LINE_SPAN - 1) return WEIGHTS.lineDouble
+    if (isLineDouble(span, openA, openB)) return WEIGHTS.lineDouble
     const mult = open === 2 ? 1.5 : 0.75
     return WEIGHTS.line * mult * (Math.min(span, LINE_SPAN) / LINE_SPAN) ** 2
   }
-  const vert = axis(comp.spanY, ea.y < comp.minY || eb.y < comp.minY, ea.y > comp.maxY || eb.y > comp.maxY)
-  const horiz = axis(comp.spanX, ea.x < comp.minX || eb.x < comp.minX, ea.x > comp.maxX || eb.x > comp.maxX)
-  return Math.max(vert, horiz)
+  const vLo = ea.y < comp.minY || eb.y < comp.minY
+  const vHi = ea.y > comp.maxY || eb.y > comp.maxY
+  const hLo = ea.x < comp.minX || eb.x < comp.minX
+  const hHi = ea.x > comp.maxX || eb.x > comp.maxX
+  return {
+    score: Math.max(axis(comp.spanY, vLo, vHi), axis(comp.spanX, hLo, hHi)),
+    double: isLineDouble(comp.spanY, vLo, vHi) || isLineDouble(comp.spanX, hLo, hHi),
+  }
 }
 
 /**
@@ -200,12 +241,12 @@ export function evaluate(state: GameState, forColor: Color): number {
     const sign = comp.color === forColor ? 1 : -1
     const loop = comp.exits ? loopThreat(comp.exits, comp.dirs!) : 0
     const line = linePotential(comp)
-    if (loop >= WEIGHTS.loop || line >= WEIGHTS.lineDouble) {
+    if (loop >= WEIGHTS.loop || line.double) {
       if (sign === 1) threatsFor++
       else threatsAgainst++
       if (comp.color === state.turn) moverThreats.push(comp.exits!)
     }
-    score += sign * (loop + line)
+    score += sign * (loop + line.score)
   }
   for (const exits of moverThreats) {
     if (closesInOne(state, state.turn, exits)) {
