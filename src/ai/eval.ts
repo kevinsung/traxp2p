@@ -17,25 +17,25 @@ export const WEIGHTS = {
   /**
    * A span-(LINE_SPAN-1) track open at both ends: completes at either end.
    *
-   * 10 000 until 2026-07-30. See `loopDouble` for why it came down; the
-   * *condition* is `isLineDouble` and no longer depends on this value.
+   * The *condition* is `isLineDouble`, which no longer reads this value — see
+   * there. That separation is what makes the magnitude re-priceable at all.
    */
-  lineDouble: 100,
+  lineDouble: 10_000,
   /**
    * Two threats one move from completing: the opponent cannot block both.
    *
-   * 10 000 until 2026-07-30, when outcome-fitted regression over 230k self-play
-   * positions priced this term at **66 points**, not 10 000 — the eval was
-   * overpricing it by two orders of magnitude. Two earlier sweeps went *up*
-   * (50 000, 500 000) and both measured level, so "magnitude does not matter
-   * here" was the standing conclusion; nobody had tried down.
+   * **This number appears not to matter, in either direction.** Outcome-fitted
+   * regression over 230k self-play positions prices the term at **66 points**
+   * (docs/ai-arena.md, 2026-07-30), i.e. claims the eval overprices it ~150x.
+   * Taking both cliffs down to 100 measured **+0.70pt over 4000 paired games**
+   * (95% CI −0.18 to +1.58) and dead level at equal work, so it was not promoted.
+   * The two earlier sweeps went *up*, to 50 000 and 500 000, and also read level.
    *
-   * 100 rather than the fitted 66 so both cliffs still outrank every smooth term
-   * (the largest is 50.6, a double-open span-6 line): the *ordering* structure is
-   * unchanged and only the magnitude moves, which is what makes the gate a test
-   * of one thing.
+   * Three measurements, three directions, all level: what this cliff is doing is
+   * *detecting* the position, and the score it assigns is nearly free. Do not
+   * spend another gate on the value.
    */
-  loopDouble: 100,
+  loopDouble: 10_000,
   /**
    * The side to move has a track that a single legal move really does close.
    * Decisive — they simply play it — but deliberately far below WIN_SCORE, so
