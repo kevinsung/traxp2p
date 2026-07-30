@@ -30,6 +30,15 @@
  *   signal. If nothing clears it, that is the result — log it and stop, rather
  *   than gating on noise.
  *
+ * A seed here resamples the **90/10 split as well as** the minibatch order, and
+ * that is deliberate: with a single fixed split the seeds differ only in shuffle
+ * order, the fits come out identical to five decimal places, the measured std is
+ * 0 and the bar it feeds waves everything through. Resampling makes the spread an
+ * estimate of the noise that actually threatens a conclusion. Comparisons stay
+ * paired — a group and the core are always compared seed by seed, on the same
+ * split — and everything is still reproducible, since the splits derive from the
+ * seeds.
+ *
  * Weights are rescaled by `std(hand) / std(w·f)` over *quiet* positions
  * (`|hand| < 1000`). Rescaling cannot change move ordering, and it is what keeps
  * `AI_LIMITS.topMargin` and the score display meaningful. The quiet mask
@@ -288,22 +297,41 @@ function configFor(ids: readonly string[]): Config {
   }
 }
 
+/** One seed's resampled 90/10 split. */
+interface Fold {
+  seed: number
+  trainIdx: Uint32Array
+  valIdx: Uint32Array
+}
+
+function makeFold(data: Data, seed: number, splitSeed: number): Fold {
+  const order = Uint32Array.from({ length: data.n }, (_, i) => i)
+  const rand = mulberry32(splitSeed + seed)
+  for (let i = data.n - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1))
+    const t = order[i]
+    order[i] = order[j]
+    order[j] = t
+  }
+  const nVal = Math.floor(data.n / 10)
+  return { seed, valIdx: order.slice(0, nVal), trainIdx: order.slice(nVal) }
+}
+
 interface FitResult {
   config: Config
-  /** Val loss per training seed. */
+  /** Val loss per fold, in fold order — so two configs' entries pair. */
   losses: number[]
-  /** Rescaled (points) weights per training seed. */
+  /** Rescaled (points) weights per fold. */
   weights: Float64Array[]
 }
 
-function runConfig(data: Data, trainIdx: Uint32Array, valIdx: Uint32Array, config: Config, o: Opts): FitResult {
-  const handStd = stdOn(data, trainIdx, null, config.active)
+function runConfig(data: Data, folds: readonly Fold[], config: Config, o: Opts): FitResult {
   const losses: number[] = []
   const weights: Float64Array[] = []
-  for (const seed of o.seeds) {
-    const w = fit(data, trainIdx, config.active, o, seed)
-    losses.push(loss(data, valIdx, w, config.active, 1))
-    const k = handStd / stdOn(data, trainIdx, w, config.active)
+  for (const fold of folds) {
+    const w = fit(data, fold.trainIdx, config.active, o, fold.seed)
+    losses.push(loss(data, fold.valIdx, w, config.active, 1))
+    const k = stdOn(data, fold.trainIdx, null, config.active) / stdOn(data, fold.trainIdx, w, config.active)
     weights.push(Float64Array.from(w, (x) => x * k))
   }
   return { config, losses, weights }
@@ -324,22 +352,7 @@ const fmtWeights = (r: FitResult): string =>
 const o = parseOpts(process.argv.slice(2))
 const data = loadData(o.data)
 
-// Deterministic 90/10 split, from its **own** seed: every configuration and
-// every training seed is scored on the same validation set, so a Δ between two
-// configs is paired rather than confounded by a resplit.
-const order = Uint32Array.from({ length: data.n }, (_, i) => i)
-{
-  const rand = mulberry32(o.splitSeed)
-  for (let i = data.n - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1))
-    const t = order[i]
-    order[i] = order[j]
-    order[j] = t
-  }
-}
-const nVal = Math.floor(data.n / 10)
-const valIdx = order.slice(0, nVal)
-const trainIdx = order.slice(nVal)
+const folds = o.seeds.map((seed) => makeFold(data, seed, o.splitSeed))
 
 let wins = 0
 let draws = 0
@@ -347,37 +360,50 @@ for (let i = 0; i < data.n; i++) {
   if (data.y[i] === 1) wins++
   else if (data.y[i] === 0.5) draws++
 }
-console.log(`loaded ${data.n} positions from ${o.data}/ (${trainIdx.length} train, ${valIdx.length} val)`)
+console.log(
+  `loaded ${data.n} positions from ${o.data}/ ` +
+    `(${folds.length} folds of ${folds[0].trainIdx.length} train / ${folds[0].valIdx.length} val, seeds ${o.seeds.join(',')})`,
+)
 console.log(`  labels: ${((100 * wins) / data.n).toFixed(1)}% White wins, ${((100 * draws) / data.n).toFixed(1)}% draws`)
 
-const baseline = fitHandScale(data, trainIdx)
-const baseVal = handLoss(data, valIdx, baseline.scale)
-console.log(`  hand eval (recorded evalWhite, temperature ${baseline.scale.toExponential(2)}): val loss ${baseVal.toFixed(5)}`)
+// The baseline is per fold too, so "beat the hand eval" is a paired claim.
+const baseScales = folds.map((f) => fitHandScale(data, f.trainIdx).scale)
+const baseLosses = folds.map((f, i) => handLoss(data, f.valIdx, baseScales[i]))
+const baseVal = mean(baseLosses)
+console.log(
+  `  hand eval (recorded evalWhite at its own temperature ${baseScales[0].toExponential(2)}): ` +
+    `val loss ${baseVal.toFixed(5)} ± ${std(baseLosses).toFixed(5)}`,
+)
 // The hand eval as a weight vector over this basis, for the record: the core
 // config's fitted weights are directly comparable with these.
 console.log(`  for comparison, HAND = ${CORE_SLOTS.map((j) => `${FEATURE_NAMES[j]} ${HAND[j]}`).join(', ')}`)
 
+const signed = (x: number): string => (x >= 0 ? '+' : '') + x.toFixed(5)
+
 if (o.groups) {
-  const core = runConfig(data, trainIdx, valIdx, coreConfig(), o)
+  const core = runConfig(data, folds, coreConfig(), o)
   console.log('')
   console.log(`core (the four nested slots, refitted): val loss ${mean(core.losses).toFixed(5)} ± ${std(core.losses).toFixed(5)}`)
   console.log(`  weights: ${fmtWeights(core)}`)
-  console.log(`  vs the hand eval: ${(mean(core.losses) - baseVal >= 0 ? '+' : '') + (mean(core.losses) - baseVal).toFixed(5)}`)
+  console.log(`  vs the hand eval: ${signed(mean(core.losses) - baseVal)}`)
 
   console.log('')
-  console.log('group                     Δ val-loss    bar (3σ)   verdict   cost')
+  console.log('group                     Δ val-loss    bar (3σ)    per-fold Δ                verdict   cost')
   const results: FitResult[] = []
   for (const g of GROUPS) {
-    const r = runConfig(data, trainIdx, valIdx, configFor([g.id]), o)
+    const r = runConfig(data, folds, configFor([g.id]), o)
     results.push(r)
-    const delta = mean(r.losses) - mean(core.losses)
+    const perFold = r.losses.map((l, i) => l - core.losses[i])
+    const delta = mean(perFold)
     // The bar is 3× the *seed-to-seed* std of val loss, taken as the larger of
-    // the two configs' — the honest noise floor for a difference between them.
+    // the two configs' — the honest noise floor for a difference between them,
+    // and stricter than the std of the paired difference (which is printed too,
+    // since a group that helps on every fold is saying something either way).
     const bar = 3 * Math.max(std(r.losses), std(core.losses))
     const verdict = -delta > bar ? 'SIGNAL' : 'noise'
     console.log(
-      `${`${g.id} ${g.name}`.padEnd(25)} ${(delta >= 0 ? '+' : '') + delta.toFixed(5)}      ` +
-        `${bar.toFixed(5)}    ${verdict.padEnd(9)} ${g.cost}`,
+      `${`${g.id} ${g.name}`.padEnd(25)} ${signed(delta)}      ${bar.toFixed(5)}     ` +
+        `${perFold.map(signed).join(' ').padEnd(25)} ${verdict.padEnd(9)} ${g.cost}`,
     )
   }
 
@@ -398,7 +424,7 @@ if (o.groups) {
 
 const ids = o.fit === 'core' ? [] : o.fit.split(',').map((s) => s.trim()).filter(Boolean)
 const config = ids.length === 0 ? coreConfig() : configFor(ids)
-const result = runConfig(data, trainIdx, valIdx, config, o)
+const result = runConfig(data, folds, config, o)
 console.log('')
 console.log(`${config.label}: val loss ${mean(result.losses).toFixed(5)} ± ${std(result.losses).toFixed(5)} (${config.cost})`)
 for (const [j, w] of meanWeights(result)) {
@@ -417,8 +443,8 @@ if (expensive.length > 0) {
   )
 }
 
-// The mean over training seeds, not one seed's fit: the seeds differ only in
-// minibatch order, so their spread is fitting noise and averaging it out is free.
+// The mean over folds, not one fold's fit: their spread is resampling noise, and
+// averaging it out costs nothing since every fold trains on 90% of the corpus.
 const w = new Float64Array(FEATURE_COUNT)
 for (const j of config.active) w[j] = mean(result.weights.map((x) => x[j]))
 const body = [...w].map((x, j) => `  ${x.toFixed(4)}, // ${FEATURE_NAMES[j]}`).join('\n')

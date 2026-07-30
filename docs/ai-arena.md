@@ -179,17 +179,31 @@ faster, and what does a ply cost" — the two mechanism numbers that decide whet
 deserves a 4000-game gate at all.
 
 ```bash
-npm run bench -- [--agents A,B] [--budget MS | --nodes N]   # node rate
-npm run bench -- --depths 3,4,5,6 [--agents A,B]            # nodes to complete each depth
-npm run bench -- --from losses.json [--count 38] [--ply 20] # regenerate the fixture
+npm run bench -- [--agents A,B] [--fixture losses|mixed] [--budget MS | --nodes N]
+npm run bench -- --depths 3,4,5,6 [--agents A,B] [--fixture losses|mixed]
+npm run bench -- --from dump.json --key losses|nonLosses [--count 38] [--ply 20]
 ```
 
-It runs over `scripts/bench-positions.json`: 38 positions taken at a fixed ply from games
-lost to the analyst (a `--diag --out` dump, which is where the tactical motifs are dense).
-Committing the fixture is the point — a number from today stays comparable with one from
+**There are two committed fixtures and a mechanism claim has to clear both.** Each is 38
+positions at ply 20 from real games against the analyst, out of a `vs-analyst --out` dump:
+
+| `--fixture` | file | drawn from |
+|---|---|---|
+| `losses` (default) | `scripts/bench-positions.json` | games we lost — tactical motifs are dense |
+| `mixed` | `scripts/bench-positions-mixed.json` | sampled won and drawn games — the control |
+
+Two of them because one was not enough. The incremental-endpoints round (2026-07-29) measured
+−15.8% nodes on `losses` and converted to +0.24pt in real games: a converging-track prior is
+precisely a tactical-motif detector, and the loss fixture is close to a best case for one.
+Ratios there are trustworthy for changes that touch every node equally and an **upper bound**
+for anything keyed on a motif. `mixed` is the honest half of that pair. Sample generously
+when regenerating it — `--out-sample 6` over 3000 games gave 478 games but only 38 distinct
+ply-20 positions, since the analyst's openings repeat heavily.
+
+Committing the fixtures is the point — a number from today stays comparable with one from
 months ago even after the analyst dependency moves.
 
-Three things to know before quoting a number from it:
+Three things to know before quoting a number from either:
 
 - **Measure nodes-to-complete-depth directly; never read a branching factor off the depth
   histogram.** `chooseMove` reports the last *fully completed* iteration and, since
@@ -203,7 +217,7 @@ Three things to know before quoting a number from it:
   invocation, and arms within one row, are comparable.
 - **Absolute node counts do not survive regenerating the fixture**, only ratios do.
 
-Measured 2026-07-29 on the current fixture: depth 3 → 4 costs ×10.9 and 4 → 5 costs ×3.1,
+Measured 2026-07-29 on the `losses` fixture: depth 3 → 4 costs ×10.9 and 4 → 5 costs ×3.1,
 for a geometric-mean **effective branching factor of 5.8**. The odd/even oscillation is
 normal alpha-beta behaviour and the geometric mean is the number to quote. It is *below*
 the √76 ≈ 8.7 that perfect ordering buys a plain minimax, which is why ordering heuristics
