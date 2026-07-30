@@ -594,3 +594,104 @@ whatever the app actually ships.
   511 to 510: occupied coordinates cap at ±509 and every index any loop here can form stays
   inside `[1, 1023]` on both axes, making the wrap unreachable rather than merely unlikely.
   `tests/fastboard.test.ts` pins the new limit.
+
+- **2026-07-29 — incremental track endpoints: built, measured, REJECTED.** Nothing in
+  `src/ai/` changed as a result. This was the last item standing in
+  `scratch/ai-next-steps.md`, and it is worth reading before anything else is built on top
+  of the track structure, because *both* halves of its pitch turn out to be wrong and the
+  measurements say something about the bench fixture too.
+
+  **What was built.** A rollback union-find over the degree-2 track graph, replacing the
+  walks in `FastBoard.detectWins` and `search2.evalWhite`. A node is one color's segment of
+  one placed tile, named `occIndex * 2 + color`; a placement seeds two singletons (the tile's
+  two ports per color are their open ends) and unions each against the neighbour it now
+  touches. Each root carries the component's two open ends — `cell * 4 + exitDir`, or `-1`
+  for a closed loop — and its bounding box; merging two paths consumes one end from each and
+  keeps the other two, which is the whole update rule. Union by size, **no path compression**
+  (compression rewrites parents `unmake` would then have to restore), and an undo log of
+  `(absorbed root, surviving root, its prior ends and box)` unwound in exact reverse
+  placement order — the same invariant the occupied stack already relies on. It is correct:
+  differential-tested against `wins.ts`'s `trace` at every ply of 40 random games, and the
+  index rolls back to exactly what a fresh build of the same position holds.
+
+  **Half one — it is not a speed win.** `prev` and `current` interleaved in one process, the
+  bench fixture at 1000 ms: **28.3k → 27.9k nodes/s**, i.e. ~1.4% *slower*, and node counts
+  byte-identical at every depth (13 784 / 150 845 / 469 434), so the eval and win detection
+  were provably unchanged. The plan predicted a modest gain here; the flat-grid round had
+  already taken the Map out of those walks, and what remained was cheap enough that `find()`
+  plus the union bookkeeping on every `make()` costs about what it saves.
+
+  **Half two — the proposed ordering signal does not exist.** "79% of real winning moves land
+  on a track's exit cell, 21% adjacent" (recorded 2026-07-26) is true and useless. An open
+  edge *is* an end of its component, so every empty cell beside a placed tile is some track's
+  exit: the exit set is exactly the candidate set (25 of 25 on the first bench position). And
+  the number of ends pointing at a cell is precisely the occupied-neighbour count `moves()`
+  already computes for free — so the "signal" is a rename of the prior that has been in the
+  ordering since 2026-07-27. Wiring it up as specified produced a **byte-identical search**.
+
+  **What the index can say that nothing else can** is *which component* an end belongs to,
+  and therefore how near one track is to closing on itself. Two more structural facts fell
+  out, both measured over 2816 positions from the bench fixture and their children:
+
+  - Separation **0** — a track's two ends pointing into one cell — **cannot occur**. Two
+    same-colored edges facing an empty cell is a *forced* placement, so the cascade has
+    already filled it. (This also means `loopThreat`'s `dist === 0` branch is dead code, and
+    the eval's loop-threat flag is effectively "separation 1".)
+  - Separation 1 happens 0.7 times per position; separation 2, **7.8** times. So separation 1
+    is selective and separation 2 is nearly the whole board.
+
+  As a move-ordering prior that is by a distance the best ordering signal this log has found.
+  Nodes to complete depth 5 over the fixture, relative to no prior:
+
+  | prior | ratio |
+  |---|---|
+  | separation 1 @ 0.2 / 0.45 / **0.9** / 2 / 20 | 0.926 / 0.858 / **0.851** / 0.865 / 0.862 |
+  | separation 1 @ 0.9 **+ separation 2 @ 0.1** | **0.842** |
+  | separation 1 @ 0.9 + separation 2 @ 0.3 | 0.855 |
+  | (for comparison) the occupied-neighbour prior, 2026-07-27 | 0.968 |
+
+  A broad plateau from 0.45 to 20, so the weight is not delicate, and — as with the neighbour
+  prior — pushing it past history makes it slightly worse rather than better. At 0.9 + 0.1:
+  **13 784 → 12 531, 150 845 → 133 520, 469 434 → 395 182 nodes**, i.e. −15.8% at depth 5,
+  against 27.9k → 26.8k nodes/s. Mean completed depth at 1000 ms went 4.74 → **4.87**.
+
+  **And it converted to nothing.** `--agents current,prev --games 1000 --seeds 1,2
+  --budget 1500 --jobs 16 --diag --sprt`, 1675 paired games:
+
+  | | current | prev |
+  |---|---|---|
+  | score | 96.4% | 96.2% |
+  | paired delta | **+0.24pt** (95% CI −1.04 to +1.52) | |
+  | nodes/s in match | 43.3k | 48.0k |
+  | mean depth | 4.97 | 5.00 |
+  | losses | 60 | 64 |
+  | `forkWidth == 1` / `>= 2` | 33 / 27 | 26 / 35 |
+
+  SPRT accepted H0. Note the in-match node-rate cost is **10%**, not the bench's 3.6%, and
+  the extra depth the bench showed does not appear at all.
+
+  **The most useful thing to take from this is about the fixture, not the change.**
+  `scripts/bench-positions.json` is 38 positions at ply 20 *from games we lost*, chosen
+  because that is where the tactical motifs are dense. A converging-track prior is precisely
+  a tactical-motif detector, so a 15.8% node reduction there is close to a best case, and it
+  did not survive contact with average positions. Ratios from that fixture are trustworthy
+  for mechanism changes that touch every node equally (speed, the neighbour prior, PVS) and
+  should be treated as an **upper bound** for anything that keys on a motif. If this is
+  revisited, regenerate a second fixture from won and drawn games and require a change to
+  clear both.
+
+  **Also worth knowing before reusing any of this:**
+
+  1. Ordering at depth-1 nodes matters more than the node counter suggests. `bump()` runs on
+     `negamax` entry and a depth-1 child is a static eval, so ordering at the frontier saves
+     *evals*, not nodes — yet gating the marking on `depth > 1` (which would have recovered
+     most of the node-rate cost) gave back nearly the whole gain: 395 182 → 460 514. The
+     frontier's cutoffs are what fill the history table that orders everything above it.
+  2. The index frees 8 MB. `detectWins`' and `evalWhite`'s `CELL_SPACE * 2` visited lanes go
+     away entirely, as does `CELL_OTHER_END` — nothing follows a track step by step any more.
+     Against that it wants a `cell → occIndex` map (4 MB per board) to name nodes by
+     occupancy slot. Roughly a wash, and not a reason to do it.
+  3. Iterate components via the occupied list and `find()`, not by scanning for roots, if you
+     want `evalWhite` to stay bit-identical: components are then visited in exactly the order
+     the walk visited them, and the float sum — and every tie-break downstream of it — is
+     unchanged. Scanning roots directly is cheaper but reorders the sum.
