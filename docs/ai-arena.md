@@ -887,3 +887,72 @@ whatever the app actually ships.
 
   **Not done, deliberately:** a second-generation corpus. Same recipe, and the `ml` branch
   measured gen-2 as a wash on 2026-07-13.
+
+  ### Gate 2 — the two-threat cliff, from 10 000 down to 100: measured, REJECTED (level)
+
+  The one hypothesis in this round that the log had never tested. `WEIGHTS.loopDouble` and
+  `WEIGHTS.lineDouble` were swept to 50 000 and 500 000 on 2026-07-25, both level, and the
+  standing conclusion was "detection precision is the lever, not magnitude". Both sweeps went
+  **up**. The instrument prices the term at 66 points, so down is where the evidence pointed.
+
+  A prerequisite that is worth keeping even though the change was not: **the cliff's condition
+  is now separate from its score.** The threat count used to test `line >= WEIGHTS.lineDouble`,
+  which asked the right question only because the score happened to exceed every other term —
+  so lowering the score would silently have changed what counts as a threat, and at 100 the
+  smooth branch reaches 135. `isLineDouble` is now the condition in both `eval.ts` and
+  `search2.ts:evalWhite`, and it reads no weight. Verified behaviour-neutral: node counts on
+  the `losses` fixture are byte-identical to `pre` at every depth (13 784 / 150 845).
+
+  Three legs, all paired against `pre`, `--jobs 16`, `--diag`:
+
+  | leg | pairs | delta | losses |
+  |---|---|---|---|
+  | `--budget 1500`, seeds 1,2 | 2000 | **+1.15pt** (CI −0.15 to +2.45) | 80 v 103 |
+  | `--budget 1500`, seeds 3,4 | 2000 | **+0.25pt** (CI −0.94 to +1.44) | 76 v 81 |
+  | pooled, budgeted | 4000 | **+0.70pt** (CI −0.18 to +1.58) | 156 v 184 |
+  | `--nodes 20000 --budget 1500`, seeds 1,2 | 2000 | **−0.10pt** (CI −1.64 to +1.44) | 138 v 136 |
+
+  **Reverted.** The pooled CI includes 0 and the equal-work leg is dead level. The first leg
+  looked like a win — a 22% fall in losses with *both* `--diag` buckets improving (45/34 against
+  56/42), which is the signature a real eval gain leaves — and it did not reproduce: on fresh
+  seeds the loss counts are 76 against 81. That is the sample-size rule doing its job on a
+  2000-pair result, which is worth noting on its own, since 2000 pairs is the bar this log has
+  been using. Node rate was level throughout (`pre` ran ~2.7% faster, from the extra condition
+  evaluation).
+
+  **What the round establishes about this cliff.** Three measurements now, in three directions
+  — 5x up, 50x up, 100x down — and all three level, against an instrument that says the term is
+  overpriced 150x. Its *score* is very nearly free; what earns its +3.4pt is that it **detects**
+  the position at all. Do not spend another gate on the number.
+
+  ### What this round leaves behind
+
+  Promoted: nothing. Kept:
+
+  1. **The instrument** — `src/ai/features.ts`, `scripts/gen-selfplay.ts`,
+     `scripts/train-eval.ts`, `scripts/screen-fork.ts`. Run `npx tsx scripts/train-eval.ts
+     --groups` before proposing an eval change: minutes, against the ~70 minutes each paired
+     leg above cost.
+  2. **`--fixture mixed`**, and the rule that a mechanism claim clears both fixtures.
+  3. **`pre`** (`src/ai/search2pre.ts`), the arm every number here was measured against, and
+     with it a fix worth knowing about: `search2base.ts` and `search2pre.ts` used to import live
+     `WEIGHTS` from `eval.ts`. **A frozen arm that reads live constants is not frozen** — the
+     re-pricing gate above would have moved both arms by the same amount and measured nothing.
+     Both now inline the values they were frozen with.
+  4. **`fit`** (`src/ai/search2fit.ts` + `src/ai/eval-fit.ts`), the fitted-eval arm, and
+     `tests/features.test.ts` pinning it to `FIT_WEIGHTS · extractCore`.
+  5. **The detection/magnitude split** in the line-double cliff (above).
+
+  Verified after the round: `npm test` (72 tests, including the nesting oracle, the
+  antisymmetry case and the existing twin check), `npm run lint`, `npm run build`, and full AI
+  games driven headlessly in the app as both colors — the computer replies inside its 1500 ms
+  budget and wins by loop and by line, with no console errors.
+
+  **The conclusion to carry forward, which is the round's actual product:** the evaluation's
+  *magnitudes and curve shapes are not what decides these games at depth ~5*. A weight vector
+  fitted to 230k outcomes, better on validation loss by 0.026, plays level. Re-pricing the
+  largest cliff by 100x plays level. Two earlier sweeps upward played level. Everything that has
+  ever moved the number here has been **depth or mechanism** — `closesInOne`, partial-iteration
+  retention, the flat grid — never the shape of the positional curve. The next eval idea worth
+  a gate is one that makes the leaf *see something it currently cannot*, and the instrument
+  above is how to find out whether it does before spending the afternoon.
