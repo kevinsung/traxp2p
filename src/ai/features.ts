@@ -462,6 +462,9 @@ export function extractVerified(fb: FastBoard, out: Float64Array): VerifiedInfo 
   return { moverWins }
 }
 
+/** Scratch vector for callers that want only the flagged list, not the features. */
+const scratch = new Float64Array(FEATURE_COUNT)
+
 /**
  * The waiter's verified threats, as one array of closing cells each — the raw
  * material G1's two slots bucket, exposed so candidate fork predicates can be
@@ -480,8 +483,6 @@ export function waiterThreats(fb: FastBoard, out: number[][]): void {
     if (cells.length > 0) out.push([...cells])
   }
 }
-
-const scratch = new Float64Array(FEATURE_COUNT)
 
 /** Dot product of a weight vector with a feature vector. */
 export function dot(w: Float64Array, f: Float64Array): number {
