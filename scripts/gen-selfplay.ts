@@ -40,6 +40,7 @@ import { appendFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } f
 import { availableParallelism } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { gameSeeds, mulberry32 } from '../src/ai/arena'
 import { extractVerified, FEATURE_COUNT } from '../src/ai/features'
 import { FastBoard } from '../src/ai/fastboard'
@@ -49,6 +50,16 @@ import { legalMoves } from '../src/game/moves'
 import type { GameState } from '../src/game/types'
 
 const PLY_LIMIT = 300
+
+const SCRIPT = fileURLToPath(import.meta.url)
+/**
+ * The `tsx` binary itself, not `npx tsx` — same as scripts/vs-analyst.ts. Going
+ * through `npx` puts a process between the parent and the shard, so the IPC
+ * channel belongs to `npx` and the shard's `process.send` is undefined: progress
+ * reporting silently does nothing. (The per-shard `.meta.json` sidecar is written
+ * by the shard itself, so the final totals survive either way.)
+ */
+const TSX_BIN = fileURLToPath(new URL('../node_modules/.bin/tsx', import.meta.url))
 
 interface Opts {
   games: number
@@ -156,7 +167,9 @@ function runShard(o: Opts): void {
   const lines: string[] = []
   for (let g = 0; g < o.shardGames; g++) {
     playGame(seeds[o.shardStart + g], o, lines, stats)
-    if (lines.length > 5000 || g === o.shardGames - 1) {
+    // Flushed often enough that a long run is not all-or-nothing: a shard plays
+    // a few hundred games and yields ~13 rows each, so 1000 is a few flushes.
+    if (lines.length > 1000 || g === o.shardGames - 1) {
       appendFileSync(o.shardFile, `${lines.join('\n')}\n`)
       lines.length = 0
     }
@@ -190,7 +203,7 @@ async function runParent(o: Opts): Promise<void> {
     const games = Math.min(per, o.games - start)
     const shardFile = path.join(o.out, `shard-${String(w).padStart(3, '0')}.jsonl`)
     const args = [
-      'scripts/gen-selfplay.ts',
+      SCRIPT,
       '--games', String(o.games),
       '--seed', String(o.seed),
       '--nodes', String(o.nodes),
@@ -202,7 +215,7 @@ async function runParent(o: Opts): Promise<void> {
     const idx = w
     children.push(
       new Promise<void>((resolve, reject) => {
-        const child = spawn('npx', ['tsx', ...args], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
+        const child = spawn(TSX_BIN, args, { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })
         child.on('message', (m: { done: number; recorded: number; settled: number }) => {
           done[idx] = m.done
           recorded[idx] = m.recorded

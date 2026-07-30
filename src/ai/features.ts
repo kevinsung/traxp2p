@@ -462,6 +462,27 @@ export function extractVerified(fb: FastBoard, out: Float64Array): VerifiedInfo 
   return { moverWins }
 }
 
+/**
+ * The waiter's verified threats, as one array of closing cells each — the raw
+ * material G1's two slots bucket, exposed so candidate fork predicates can be
+ * screened against ground truth (scripts/screen-fork.ts) without each one
+ * re-deriving the enumeration. Offline only.
+ *
+ * Cells are packed cell indices; use `cellX`/`cellY` for geometry.
+ */
+export function waiterThreats(fb: FastBoard, out: number[][]): void {
+  out.length = 0
+  extractCore(fb, scratch)
+  const waiter = fb.turn ^ 1
+  for (let i = 0; i < flagged.length; i += 3) {
+    if (flagged[i] !== waiter) continue
+    const cells = closingCells(fb, waiter, flagged[i + 1], flagged[i + 2])
+    if (cells.length > 0) out.push([...cells])
+  }
+}
+
+const scratch = new Float64Array(FEATURE_COUNT)
+
 /** Dot product of a weight vector with a feature vector. */
 export function dot(w: Float64Array, f: Float64Array): number {
   let z = 0
