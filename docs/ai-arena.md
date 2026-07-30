@@ -709,3 +709,128 @@ whatever the app actually ships.
      want `evalWhite` to stay bit-identical: components are then visited in exactly the order
      the walk visited them, and the float sum — and every tie-break downstream of it — is
      unchanged. Scanning roots directly is cheaper but reorders the sum.
+
+- **2026-07-30 — pricing the eval's terms from self-play outcomes.** A round about
+  *instrumentation* first and changes second. Every eval round before it learned one bit per
+  multi-hour paired gate; three of the last four spent that gate to learn "level". This builds
+  an offline instrument that puts a number on a candidate term in **eval points** before any
+  gate runs, then spends gates only on what it ranks highest.
+
+  **The instrument.** `src/ai/features.ts` expresses a position as a feature vector whose
+  first four slots *are* the hand eval's own components — `tempo`, `loop_sum`, `line_max`,
+  `two_threat` — so that
+
+  ```
+  HAND · extractCore(fb) === evalWhite(fb)
+  ```
+
+  exactly (asserted in `tests/features.test.ts` over random positions). Three things follow
+  from nesting rather than merely resembling the eval:
+
+  1. It is a **drift-proof oracle**. The unmerged `ml` branch carried a hand-transcribed copy
+     of the eval's weights, which went stale inside two weeks with nothing noticing.
+  2. Every *other* slot's fitted weight reads as an **increment over what the eval already
+     does** — the only interpretation that makes a price meaningful.
+  3. Because `two_threat` is a slot, the fit prices the ±10 000 cliff **for free**.
+
+  `scripts/gen-selfplay.ts` plays the shipped search against itself and records
+  `{ result, features, hand }` per position; `scripts/train-eval.ts` fits `sigmoid(w·f)` to the
+  result and reports Δ validation loss per candidate group. Corpus: **229 863 positions from
+  15 428 self-play games** (`--nodes 5000 --margin 5`, 54 shards; the two shards covering
+  games [5434, 5720) and [10868, 11154) were dropped after running 3× longer than the rest).
+  Positions where the mover has a **verified win in one are excluded** — they are tactically
+  settled, `evalWhite` *replaces* its score with ±`winInOne` there, and that exclusion is what
+  makes the nesting identity exact. 4.4% of positions.
+
+  **The price list.** Baseline is the *recorded* hand score at its own best temperature, so
+  "did we beat the eval that shipped" is measured against the real thing. Groups are priced by
+  leave-one-in ablation, not one joint fit: G3 reparametrises `loop_sum` and G4 reparametrises
+  `line_max`, so jointly they would be collinear.
+
+  | | Δ val-loss vs core | fitted weight (points) | hand | runtime |
+  |---|---|---|---|---|
+  | hand eval, as recorded | +0.01831 | — | — | — |
+  | **core, refitted** | **(reference)** | tempo **39.5**, loop_sum **1.15**, line_max **0.00**, two_threat **65.6** | 10 / 1 / 1 / 10 000 | free |
+  | G1 waiter asymmetry | **−0.00311** | waiter_open **+349**, waiter_blockable **−65** | none | expensive |
+  | G2 cliff magnitude | +0.00001 | fork_count 8.7 | none | free |
+  | G3 separation buckets | **−0.00474** | d1 50.7, d2 30.9, d3 1.0, far 62.3, blocked 4.9 | 100 / 25 / 11.1 / 100 / 0 | free |
+  | G4 line aggregation | **−0.00463** | line2_s6 67.4, line1_s7 30.1, line_double 23.8, … | (max of axes) | free |
+  | G5 fragmentation | −0.00176 | tracks +13.3 | none | free |
+
+  Bar for "signal": 3× the larger of the fold-to-fold std of Δ and the within-fold
+  per-position standard error, over 3 resampled 90/10 splits. **The plan's stated bar — 3× the
+  seed-to-seed std of val loss — is the wrong test and was replaced.** A group's Δ is a
+  *paired* quantity, both arms scored on the same positions, while the fold-to-fold spread of
+  either arm's absolute loss is dominated by which positions landed in validation, and that
+  cancels in the difference. Judging one against the other rejected differences that
+  reproduced to three digits on all three folds. (Also worth knowing: with a *fixed* split the
+  seeds differ only in minibatch order, the fits come out identical to five decimals, and the
+  measured std is 0 — a bar of 0 waves everything through.)
+
+  **The headline is not any of the groups.** Refitting the four weights the eval already has
+  is worth **−0.0183**, four times the best new term, and costs nothing at runtime. What it
+  says:
+
+  - **`two_threat` is worth 66 points, not 10 000** — the eval overprices it by two orders of
+    magnitude. This log records two sweeps of that cliff, to 50 000 and 500 000, both level,
+    and concluded "magnitude is not the lever here". Both went *up*.
+  - **`line_max` is worth 0.00.** As a single linear term the whole line-potential curve
+    carries no outcome information once loop threats and tempo are accounted for. G4 recovers
+    signal from the same geometry by splitting it into span × open-ends buckets, so the term's
+    *shape* is what is wrong, not its existence.
+  - **`tempo` is worth ~39, not 10** — and this one is a trap, see below.
+
+  **Two findings that contradict the `ml` branch outright**, which is why its numbers were not
+  reused as evidence: it priced `threat_waiter` at −98.5 ("a threat held by the side not to
+  move is nearly neutralised") and `tracks` at −11.6. Over a corpus that knows about
+  `closesInOne`, a waiter threat splits sharply by whether it can be answered — **+349** when
+  its closing cells are ≥3 apart, **−65** when they are not — and `tracks` comes out *positive*
+  and inside the noise bar.
+
+  **Do not gate `tempo`.** It prices high and it is nearly a no-op in this search, for a
+  structural reason worth keeping: `madeScore` evaluates at `depth <= 1`, so every leaf of one
+  deepening iteration sits at the same ply and therefore has the same side to move, and the
+  tempo term contributes the *same constant* to every leaf score it compares. Outcome
+  regression rewards knowing who has the move; a fixed-depth negamax frontier cannot use it.
+  **The general lesson: the price list values a term for prediction, and the search only cares
+  about terms that vary across the leaves it is comparing.** Check that before spending a gate.
+
+  ### The fork candidate generator, screened and retired
+
+  `scratch/ai-next-steps.md`'s remaining top item was that the working fork predicate — a
+  waiter threat whose two closing cells are ≥3 apart — is 94.3% precise at 35.7% recall, and
+  "the missing 64% is the whole prize". `scripts/screen-fork.ts` measures candidate predicates
+  against **exact ground truth** (the mover has no legal move that avoids leaving a win in one,
+  computed by playing both plies on a FastBoard), over **10 639 positions from 379 games lost
+  to the analyst**. 370 of them, 3.5%, are forked.
+
+  | predicate | fires | precision | recall |
+  |---|---|---|---|
+  | any closing cell | 2797 | 12.1% | 91.6% |
+  | one track, cells ≥3 apart | 7 | 28.6% | 0.5% |
+  | **union of tracks, cells ≥3 apart** | 171 | **92.4%** | **42.7%** |
+  | ≥2 threatening tracks | 166 | 95.2% | 42.7% |
+  | union has no common answer | 191 | 83.8% | 43.2% |
+  | one track has no common answer | 27 | 14.8% | 1.1% |
+
+  The method reproduces the 2026-07-29 numbers (12.1%/91.6% against 11.6%/90.8% for "any
+  closing cell"), which is what makes the rest of the table trustworthy. Three results:
+
+  1. **The published ≥3-apart predicate is the *union* form, not the within-track form.**
+     Within a single track it fires 7 times in 10 639 positions. Worth correcting, because the
+     within-track reading is the natural one and it does nothing.
+  2. **The separation test adds nothing over simply counting verified waiter threats.** ≥2
+     threatening tracks: 166 fires, 95.2% precision, identical recall. The geometry was never
+     the signal; having two answerable-only-one-at-a-time threats was.
+  3. **No candidate breaks the recall ceiling, and the ceiling is structural.** Of the 370
+     forked positions, the waiter holds **exactly one** verified threat in **48.9%** and two in
+     42.7% (8.4% have none at all). A *fork* detector cannot exceed ~43% recall no matter how
+     good it is, because half of these positions are not forks — they are single threats the
+     mover cannot answer. Including the dominating-cell generalisation ("no single placement
+     answers every closing cell", strictly stronger than any pairwise-distance test), which
+     buys 0.5pt of recall for 8.6pt of precision.
+
+  So "the missing 64% needs a better candidate generator" was a misdiagnosis: most of what is
+  missing is not a fork. **Item 1 of `scratch/ai-next-steps.md` is retired**, and nothing was
+  gated for it — G1 prices as signal but wants both-side `closesInOne`, whose runtime cost
+  (−18% node rate) was already measured to eat more than the vision buys.
