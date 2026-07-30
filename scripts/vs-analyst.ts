@@ -25,6 +25,10 @@
  *     of our legal moves handed the analyst a win-in-1, and how many winning
  *     replies it had there. `forkWidth == 1` is a single unstoppable threat (more
  *     search depth); `>= 2` is a fork (an eval/threat-detection problem).
+ *
+ * `--out` dumps the transcripts, losses and a sample of won/drawn games under
+ * separate keys — the raw material for both bench fixtures (`scripts/bench.ts
+ * --from --key`) and for the eval's precision studies.
  */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -38,6 +42,7 @@ import { gameSeeds, mulberry32 } from '../src/ai/arena'
 import { chooseMove as chooseV1, type SearchLimits, type SearchResult } from '../src/ai/search'
 import { AI_LIMITS, chooseMove as chooseCurrent } from '../src/ai/search2'
 import { chooseMove as chooseBase } from '../src/ai/search2base'
+import { chooseMove as choosePre } from '../src/ai/search2pre'
 import { applyMove, newGame } from '../src/game/engine'
 import { legalMoves } from '../src/game/moves'
 import { decodeMove } from '../src/game/notation'
@@ -60,6 +65,10 @@ const CHOOSERS: Record<string, ChooseFn> = {
   // Frozen copy of the shipped search + board as of commit 14da60e, so a change
   // can be gated paired against exactly what it replaced. See src/ai/search2base.ts.
   base: chooseBase,
+  // Frozen copy of the search as of commit ad67e68, before the 2026-07-30
+  // evaluation-pricing round. `base` is four promoted rounds stale, so it is not
+  // a valid pairing arm for that round — this is. See src/ai/search2pre.ts.
+  pre: choosePre,
   v1: chooseV1,
 }
 
@@ -189,6 +198,28 @@ interface Loss {
   forkWidth?: number
 }
 
+/**
+ * A won or drawn game, kept for `--out` so the dump can seed a bench fixture
+ * that is *not* drawn from losses. Only every `--out-sample`th game is kept: at
+ * a 96% win rate these outnumber the losses ~25:1, and a fixture needs a few
+ * dozen positions, not thousands.
+ *
+ * Sample generously, though: distinct *positions* are what a fixture needs, and
+ * the analyst's first plies repeat heavily — 109 sampled games gave only 28
+ * distinct positions at ply 20.
+ */
+interface NonLoss {
+  seed: number
+  agent: string
+  game: number
+  color: Color
+  /** 'win' or 'draw'; a loss goes in `losses` instead, with its taxonomy. */
+  result: 'win' | 'draw'
+  plies: number
+  transcript: string
+}
+
+
 /** Everything a report needs from one agent's games, mergeable across shards. */
 interface AgentTally {
   games: number
@@ -198,10 +229,12 @@ interface AgentTally {
   totalPlies: number
   instr: Instrument
   lossList: Loss[]
+  /** Sampled won/drawn games; only populated under `--out`. */
+  nonLossList: NonLoss[]
 }
 
 function newTally(): AgentTally {
-  return { games: 0, wins: 0, draws: 0, losses: 0, totalPlies: 0, instr: newInstrument(), lossList: [] }
+  return { games: 0, wins: 0, draws: 0, losses: 0, totalPlies: 0, instr: newInstrument(), lossList: [], nonLossList: [] }
 }
 
 /**
@@ -286,6 +319,7 @@ function mergeInto(acc: ShardResult, s: ShardResult): void {
     a.instr.depthSum += t.instr.depthSum
     for (let d = 0; d < MAX_HIST_DEPTH; d++) a.instr.depthHist[d] += t.instr.depthHist[d] ?? 0
     a.lossList.push(...t.lossList)
+    a.nonLossList.push(...(t.nonLossList ?? []))
   }
   for (let i = 0; i < 5; i++) acc.pairHist[i] += s.pairHist[i] ?? 0
 }
@@ -441,6 +475,8 @@ const wantDiag = flags.has('diag')
 const wantSprt = flags.has('sprt')
 /** H1's effect size, as a fraction of a point of score. Default +2pt. */
 const sprtDelta = Number(opts['sprt-delta'] ?? 0.02)
+/** Keep one won/drawn game in this many for `--out`; see NonLoss. */
+const nonLossSample = Number(opts['out-sample'] ?? 25)
 
 if (!Number.isFinite(games) || games < 1) throw new Error('--games must be at least 1')
 if (seeds.some((s) => !Number.isFinite(s))) throw new Error(`bad --seeds: ${opts.seeds ?? opts.seed}`)
@@ -527,9 +563,11 @@ function playRange(start: number, count: number, onGame?: (r: ShardResult) => vo
         if (!state.result) {
           arm.tally.draws++
           scores.push(0.5)
+          keepNonLoss(arm, seed, g, ourColor, 'draw', state)
         } else if (state.result.winner === ourColor) {
           arm.tally.wins++
           scores.push(1)
+          keepNonLoss(arm, seed, g, ourColor, 'win', state)
         } else {
           arm.tally.losses++
           scores.push(0)
@@ -555,6 +593,31 @@ function playRange(start: number, count: number, onGame?: (r: ShardResult) => vo
   function finish(r: ShardResult): ShardResult {
     if (wantDiag) for (const arm of arms) for (const l of arm.tally.lossList) diagnose(l)
     return r
+  }
+
+  /**
+   * Record a won or drawn game for `--out`, one game in `--out-sample`.
+   * Keyed on the global game index so the sample is the same set however the
+   * match is sharded, exactly like the per-game seeds.
+   */
+  function keepNonLoss(
+    arm: { name: string; tally: AgentTally },
+    seed: number,
+    g: number,
+    color: Color,
+    outcome: 'win' | 'draw',
+    state: GameState,
+  ): void {
+    if (!opts.out || g % nonLossSample !== 0) return
+    arm.tally.nonLossList.push({
+      seed,
+      agent: arm.name,
+      game: g,
+      color,
+      result: outcome,
+      plies: state.history.length,
+      transcript: encodeMoves(state.history),
+    })
   }
 }
 
@@ -799,8 +862,16 @@ if (opts['shard-start'] !== undefined) {
   console.log(`  ${elapsedS.toFixed(0)}s total`)
 
   if (opts.out) {
-    const losses = agentNames.flatMap((n) => merged.byAgent[n].lossList).sort((a, b) => a.seed - b.seed || a.game - b.game)
-    writeFileSync(opts.out, JSON.stringify({ agents: agentNames, games, seeds, cap, losses }, null, 1))
-    console.log(`  loss transcripts → ${opts.out}`)
+    const byGame = <T extends { seed: number; game: number }>(a: T, b: T): number => a.seed - b.seed || a.game - b.game
+    const losses = agentNames.flatMap((n) => merged.byAgent[n].lossList).sort(byGame)
+    // Won and drawn games go in their own key rather than alongside the losses:
+    // every consumer so far wants one or the other, never the union. See
+    // `scripts/bench.ts --from --key`, which builds a fixture from either.
+    const nonLosses = agentNames.flatMap((n) => merged.byAgent[n].nonLossList).sort(byGame)
+    writeFileSync(
+      opts.out,
+      JSON.stringify({ agents: agentNames, games, seeds, cap, sample: nonLossSample, losses, nonLosses }, null, 1),
+    )
+    console.log(`  ${losses.length} loss + ${nonLosses.length} sampled won/drawn transcripts → ${opts.out}`)
   }
 }

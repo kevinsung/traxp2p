@@ -24,6 +24,7 @@ import { mergeTallies, playGames, summarize, type MatchTally } from '../src/ai/a
 import { AI_LIMITS, chooseMove as chooseMoveV1, type SearchLimits } from '../src/ai/search'
 import { chooseMove as chooseMoveV2 } from '../src/ai/search2'
 import { chooseMove as chooseMoveBase } from '../src/ai/search2base'
+import { chooseMove as chooseMovePre } from '../src/ai/search2pre'
 
 const SCRIPT = fileURLToPath(import.meta.url)
 const TSX_BIN = fileURLToPath(new URL('../node_modules/.bin/tsx', import.meta.url))
@@ -51,6 +52,10 @@ function buildRegistry(limits: SearchLimits): Record<string, Agent> {
     // src/ai/search2base.ts); the regression baseline while search work is in
     // flight, and the arm `scripts/vs-analyst.ts --agents base,current` pairs against.
     base: searchAgent('base', chooseMoveBase, limits),
+    // Frozen copy of the search as of commit ad67e68, before the 2026-07-30
+    // evaluation-pricing round (src/ai/search2pre.ts). `base` is four promoted
+    // rounds stale and is not a valid pairing arm for that round; this is.
+    pre: searchAgent('pre', chooseMovePre, limits),
     v1: searchAgent('v1', chooseMoveV1, limits),
     random: randomAgent('random'),
   }
